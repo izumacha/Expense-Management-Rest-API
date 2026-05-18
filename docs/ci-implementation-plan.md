@@ -52,7 +52,9 @@ ci.yml
 | .NET セットアップ | `actions/setup-dotnet@v4`（`global.json` 参照） | — |
 | ツール復元 | `dotnet tool restore` | — |
 | フォーマット検査 | `dotnet format --verify-no-changes --severity warn` | 差分があればfail |
-| 脆弱パッケージ | `dotnet list package --vulnerable --include-transitive` をパースしてfail | CRITICAL/HIGH があればfail |
+| 脆弱パッケージ | `dotnet list package --vulnerable --include-transitive --format json` の出力をスクリプトで解析 | High / Critical が1件以上ならfail、Low / Moderate は初期段階では warning（fail させない） |
+
+> 補足: `--format json` の対応は採用する .NET SDK バージョンで要確認。未対応バージョンを採用する場合は、テキスト出力を `grep -E '>\s+(High|Critical)'` で判定する暫定実装にフォールバックする。
 
 ### ジョブ2: `build-test`
 
@@ -76,9 +78,11 @@ ci.yml
 |---|---|
 | Checkout / setup-dotnet | — |
 | Docker 起動確認 | `docker info` |
-| TestContainers 実行 | `dotnet test tests/AgentForge.IntegrationTests --no-build -c Release --logger trx` |
+| TestContainers 実行 | `dotnet test tests/AgentForge.IntegrationTests -c Release --logger trx` |
 
 理由: Postgres / Redis を起動するため最も時間がかかる。全PRで走らせると DX が落ちる。
+
+> 注意: `integration` は `build-test` と並列実行のため、自ジョブ内でビルドさせる必要がある（`--no-build` は付けない）。`build-test` の成果物を `actions/upload-artifact` で受け渡す案も検討したが、初期段階ではYAMLを単純に保つことを優先し、ジョブ内ビルドを採用する。
 
 ## 共有設定
 
