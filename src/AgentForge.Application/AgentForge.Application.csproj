@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>AgentForge.Application</RootNamespace>
+    <AssemblyName>AgentForge.Application</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgentForge.Domain\AgentForge.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

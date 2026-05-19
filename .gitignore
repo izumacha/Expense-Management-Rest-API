@@ -1,0 +1,28 @@
+## .NET
+bin/
+obj/
+out/
+*.user
+*.suo
+*.userprefs
+*.vsidx
+*.sln.docstates
+
+## IDEs
+.vs/
+.vscode/
+.idea/
+
+## Test / coverage
+TestResults/
+coverage/
+*.trx
+*.coverage
+*.coveragexml
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Local SDK
+.dotnet/
