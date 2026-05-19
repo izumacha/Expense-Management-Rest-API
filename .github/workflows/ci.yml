@@ -62,4 +62,4 @@ jobs:
         with:
           name: test-results
           path: '**/TestResults/*.trx'
-          if-no-files-found: ignore
+          if-no-files-found: error
