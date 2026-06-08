@@ -1,3 +1,11 @@
+# expense-tracker
+
+**[日本語](#日本語) | [English](#english)**
+
+---
+
+<a id="日本語"></a>
+
 # expense-tracker（支出管理 API）
 
 「いつ・何に・いくら使ったか」を記録して、月ごとに集計できる **家計簿アプリの裏側（バックエンド API）** です。
@@ -246,3 +254,260 @@ exception   … エラー処理
 - お金を正確に扱う作法（`BigDecimal`）
 - 日付・期間での絞り込みと、URL のパラメータ設計
 - 入力チェックとエラー処理を1か所にまとめる方法
+
+<p align="right"><a href="#expense-tracker">▲ 上に戻る / Back to top</a></p>
+
+---
+
+<a id="english"></a>
+
+# expense-tracker (Expense Management API)
+
+A **backend API for a household expense-tracking app** that records "when, on what, and how much you spent" and aggregates it by month.
+It has no screen of its own. It is a data-only program meant to be called from a "front end" such as a mobile app or a web page.
+
+> **What is an API?**
+> It's a "service window" through which apps exchange data.
+> When you ask this window things like "register this expense" or "tell me June's total," it returns a result.
+> The exchange uses JSON, a text format that is also easy for humans to read.
+
+---
+
+## What it can do
+
+- Create and list **categories** (expense classifications such as Food or Transport)
+- Create, list, update, and delete **expenses** (e.g. a 1280-yen lunch)
+- Get **monthly summaries** (the month's grand total and a per-category breakdown)
+
+### The two kinds of data
+
+| Data | Meaning | Example |
+|------|---------|---------|
+| Category | A name used to classify expenses | Food, Transport, Entertainment |
+| Expense | A single payment record | "Lunch for 1280 yen on 6/9 (Food)" |
+
+Every expense belongs to exactly one category. The flow is: create a category first, then register expenses under it.
+
+---
+
+## Requirements
+
+- **Docker** and **Docker Compose** (with just these, a single command below gets it running)
+
+If you prefer to run it directly without Docker, you'll separately need **Java 21** and **PostgreSQL 16** (see "Running without Docker").
+
+---
+
+## Try it out (shortest path)
+
+### 1. Start it
+
+In the project folder (where this README lives), just run this one command.
+
+```bash
+docker compose up --build
+```
+
+This brings up two things together: the **application** and the **database (PostgreSQL)**.
+When you see a log line like `Started ExpenseTrackerApplication`, it's ready.
+The window is open at **http://localhost:8080**.
+
+> To stop it, press `Ctrl + C` in the terminal.
+
+### 2. Create a category
+
+Open another terminal and try it with `curl` (a tool for calling an API from the command line).
+
+```bash
+curl -X POST http://localhost:8080/api/categories \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Food"}'
+```
+
+On success, the created category is returned (`id` is an automatically assigned number).
+
+```json
+{ "id": 1, "name": "Food" }
+```
+
+### 3. Register an expense
+
+Specify the `id` of the category you just created (here, `1`).
+
+```bash
+curl -X POST http://localhost:8080/api/expenses \
+  -H "Content-Type: application/json" \
+  -d '{"amount":1280,"categoryId":1,"description":"Lunch","spentOn":"2026-06-09"}'
+```
+
+Example of what comes back:
+
+```json
+{
+  "id": 1,
+  "amount": 1280,
+  "categoryId": 1,
+  "categoryName": "Food",
+  "description": "Lunch",
+  "spentOn": "2026-06-09",
+  "createdAt": "2026-06-09T12:30:00"
+}
+```
+
+### 4. View the monthly summary
+
+```bash
+curl "http://localhost:8080/api/expenses/summary?month=2026-06"
+```
+
+It returns that month's **total** and a **per-category breakdown**.
+
+```json
+{
+  "month": "2026-06",
+  "total": 52340,
+  "byCategory": [
+    { "categoryId": 1, "categoryName": "Food",      "total": 31200 },
+    { "categoryId": 2, "categoryName": "Transport", "total": 21140 }
+  ]
+}
+```
+
+---
+
+## API reference
+
+"Method" is the kind of operation (GET = read, POST = create, PUT = update, DELETE = delete).
+Replace `{id}` with an actual number (e.g. `1`).
+
+### Categories
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| POST   | `/api/categories` | Create a category |
+| GET    | `/api/categories` | List categories |
+
+### Expenses
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| POST   | `/api/expenses` | Register an expense |
+| GET    | `/api/expenses` | List expenses (filterable; see below) |
+| GET    | `/api/expenses/{id}` | View one expense in detail |
+| PUT    | `/api/expenses/{id}` | Update an expense |
+| DELETE | `/api/expenses/{id}` | Delete an expense |
+| GET    | `/api/expenses/summary?month=YYYY-MM` | View the monthly summary |
+
+#### Filtering the expense list
+
+`GET /api/expenses` can be narrowed with conditions (both optional).
+
+- `month=2026-06` … only expenses in the given month
+- `categoryId=1` … only expenses in the given category
+
+```bash
+# Only Food (category ID = 1) expenses in June 2026
+curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
+```
+
+---
+
+## Input rules (validation)
+
+To prevent bad data, the following checks run on create/update. Violations return an error.
+
+| Field | Rule |
+|-------|------|
+| `amount` | Required. A number **greater than 0** |
+| `categoryId` | Required. Must be the number of an **existing category** |
+| `spentOn` (date) | Required. `YYYY-MM-DD` format. **Future dates not allowed** |
+| `description` (memo) | Optional. Up to 255 characters |
+| category `name` | Required. Up to 50 characters. **No duplicate names** allowed |
+
+> Amounts can include decimals. They are computed internally with an error-free type (`BigDecimal`), so money totals never drift.
+
+---
+
+## When an error comes back
+
+On error, the response uses a common format that makes the problem clear.
+
+```json
+{ "status": 400, "message": "amount: must be greater than 0" }
+```
+
+What the `status` number means:
+
+| Code | Meaning | Example |
+|------|---------|---------|
+| 400 | Input breaks a rule | Amount ≤ 0, malformed date, etc. |
+| 404 | Target not found | A category/expense number that doesn't exist |
+| 409 | Conflict (duplicate) | Trying to create a category whose name already exists |
+
+---
+
+## Running without Docker
+
+If you can provide **Java 21** and **PostgreSQL 16** locally, you can start it directly.
+
+```bash
+# Start via the bundled Maven wrapper
+./mvnw spring-boot:run
+```
+
+The database connection can be overridden with these environment variables (if unset, the defaults in `application.yml` are used).
+
+| Environment variable | Meaning |
+|----------------------|---------|
+| `SPRING_DATASOURCE_URL` | Connection target (e.g. `jdbc:postgresql://localhost:5432/expensetracker`) |
+| `SPRING_DATASOURCE_USERNAME` | Username |
+| `SPRING_DATASOURCE_PASSWORD` | Password |
+
+> The usernames/passwords written in the config file and docker-compose are **defaults for local trials**. Always change them in production.
+
+---
+
+## Tech stack
+
+| Area | Technology | In a nutshell |
+|------|------------|---------------|
+| Language | Java 21 | The language the program is written in |
+| Framework | Spring Boot 3.3 | A foundation for building Web APIs quickly |
+| Database | PostgreSQL 16 | Where expense data is stored |
+| Build | Maven | Tool that assembles an executable from source |
+| Helper | Lombok | Tool that auto-generates boilerplate to keep code short |
+| Runtime | Docker / docker-compose | Mechanism to start the app and DB together |
+
+---
+
+## Project layout (for developers)
+
+Folders are split by responsibility.
+
+```
+controller  … the reception window for incoming requests
+service     … business logic (aggregation, validation, etc.)
+repository  … talking to the database
+domain      … the shape of the data (Category, Expense)
+dto         … the input/output shapes exchanged with the outside (request / response)
+exception   … error handling
+```
+
+### Design points
+
+- **Internal data (entities) are not returned directly; they are converted into dedicated input/output shapes (DTOs).** Internal structure never leaks outside, which is safer.
+- **Monthly summaries are aggregated on the database side** (SQL `GROUP BY`). The app doesn't add them up one by one, so it's fast and avoids wasteful queries (the N+1 problem).
+- **`month=YYYY-MM` is converted into a range** of "from the first day of that month up to (but not including) the first day of the next month."
+- Amounts are handled with `BigDecimal` (a type free of floating-point rounding error).
+
+---
+
+## What you can learn from this project
+
+- The basics of REST APIs (read, create, update, delete — the full set)
+- Aggregation in the database (`GROUP BY`)
+- The practice of handling money accurately (`BigDecimal`)
+- Filtering by date/period, and URL query-parameter design
+- Centralizing input validation and error handling in one place
+
+<p align="right"><a href="#expense-tracker">▲ Back to top / 上に戻る</a></p>
