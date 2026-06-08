@@ -1,0 +1,14 @@
+# Maven のビルド成果物
+target/
+# IntelliJ IDEA の設定ファイル
+.idea/
+# Eclipse の設定ファイル
+.classpath
+.project
+.settings/
+# VS Code の設定ファイル
+.vscode/
+# OS が生成するファイル
+.DS_Store
+# ログファイル
+*.log

@@ -1,0 +1,33 @@
+# Spring アプリケーションの設定
+spring:
+  # データソース（DB 接続）の設定
+  datasource:
+    # 接続先 URL（環境変数があれば優先、無ければローカルの既定値）
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/expensetracker}
+    # 接続ユーザー名
+    username: ${SPRING_DATASOURCE_USERNAME:expensetracker}
+    # 接続パスワード
+    password: ${SPRING_DATASOURCE_PASSWORD:expensetracker}
+    # 使用する JDBC ドライバ
+    driver-class-name: org.postgresql.Driver
+  # JPA / Hibernate の設定
+  jpa:
+    # スキーマ自動更新（Flyway はスコープ外）
+    hibernate:
+      # エンティティに合わせてテーブルを更新する
+      ddl-auto: update
+    # Open Session In View を無効化する
+    open-in-view: false
+    # SQL の各種挙動
+    properties:
+      # Hibernate 固有のプロパティ
+      hibernate:
+        # 実行 SQL を整形して表示する
+        format_sql: true
+    # 実行された SQL をログ出力する
+    show-sql: true
+
+# サーバの設定
+server:
+  # 待ち受けポート（8080 で待受）
+  port: 8080
