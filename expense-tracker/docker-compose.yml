@@ -1,0 +1,64 @@
+# サービス群の定義
+services:
+  # PostgreSQL データベースサービス
+  db:
+    # 使用するイメージ（PostgreSQL 16）
+    image: postgres:16
+    # コンテナ名を分かりやすく固定する
+    container_name: expense-tracker-db
+    # DB の初期化用環境変数
+    environment:
+      # 作成するデータベース名
+      POSTGRES_DB: expensetracker
+      # 作成するユーザー名
+      POSTGRES_USER: expensetracker
+      # 設定するパスワード
+      POSTGRES_PASSWORD: expensetracker
+    # データを永続化するボリュームマウント
+    volumes:
+      # 名前付きボリュームを PostgreSQL のデータ領域に割り当てる
+      - db-data:/var/lib/postgresql/data
+    # ホストへポートを公開する（任意・確認用）
+    ports:
+      # ホスト 5432 をコンテナ 5432 に割り当てる
+      - "5432:5432"
+    # 起動完了を判定するヘルスチェック
+    healthcheck:
+      # DB の応答可否を確認するコマンド
+      test: ["CMD-SHELL", "pg_isready -U expensetracker -d expensetracker"]
+      # チェック間隔
+      interval: 5s
+      # タイムアウト時間
+      timeout: 5s
+      # リトライ回数
+      retries: 10
+
+  # アプリケーションサービス
+  app:
+    # カレントディレクトリの Dockerfile からビルドする
+    build: .
+    # コンテナ名を分かりやすく固定する
+    container_name: expense-tracker-app
+    # DB の起動完了後にアプリを起動する
+    depends_on:
+      # db サービスの状態に依存する
+      db:
+        # ヘルスチェック成功を待つ
+        condition: service_healthy
+    # アプリへ渡す環境変数（DB 接続情報）
+    environment:
+      # JDBC 接続 URL（サービス名 db で名前解決）
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/expensetracker
+      # 接続ユーザー名
+      SPRING_DATASOURCE_USERNAME: expensetracker
+      # 接続パスワード
+      SPRING_DATASOURCE_PASSWORD: expensetracker
+    # ホストへ待受ポートを公開する
+    ports:
+      # ホスト 8080 をコンテナ 8080 に割り当てる
+      - "8080:8080"
+
+# 名前付きボリュームの定義
+volumes:
+  # DB データ永続化用ボリューム
+  db-data:

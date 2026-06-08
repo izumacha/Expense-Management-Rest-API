@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Maven プロジェクト定義ファイル -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <!-- POM のモデルバージョン -->
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Spring Boot の親 POM を継承する -->
+    <parent>
+        <!-- 親 POM のグループ ID -->
+        <groupId>org.springframework.boot</groupId>
+        <!-- 親 POM のアーティファクト ID -->
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <!-- 親 POM のバージョン（Spring Boot 3.3 系） -->
+        <version>3.3.5</version>
+        <!-- 親 POM をリポジトリから取得する設定 -->
+        <relativePath/>
+    </parent>
+
+    <!-- このプロジェクトのグループ ID -->
+    <groupId>com.izumacha</groupId>
+    <!-- このプロジェクトのアーティファクト ID -->
+    <artifactId>expense-tracker</artifactId>
+    <!-- このプロジェクトのバージョン -->
+    <version>0.0.1-SNAPSHOT</version>
+    <!-- 成果物の名称 -->
+    <name>expense-tracker</name>
+    <!-- プロジェクトの説明 -->
+    <description>個人の支出を記録・集計する家計簿アプリのバックエンド API</description>
+
+    <!-- ビルド時の各種プロパティ -->
+    <properties>
+        <!-- 使用する Java のバージョンを 21 に固定 -->
+        <java.version>21</java.version>
+    </properties>
+
+    <!-- 依存ライブラリの一覧 -->
+    <dependencies>
+        <!-- Web（REST コントローラ）機能 -->
+        <dependency>
+            <!-- Spring Boot のグループ ID -->
+            <groupId>org.springframework.boot</groupId>
+            <!-- Web スターター -->
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Spring Data JPA（DB アクセス）機能 -->
+        <dependency>
+            <!-- Spring Boot のグループ ID -->
+            <groupId>org.springframework.boot</groupId>
+            <!-- JPA スターター -->
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- Bean Validation（入力検証）機能 -->
+        <dependency>
+            <!-- Spring Boot のグループ ID -->
+            <groupId>org.springframework.boot</groupId>
+            <!-- Validation スターター -->
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- PostgreSQL の JDBC ドライバ -->
+        <dependency>
+            <!-- PostgreSQL のグループ ID -->
+            <groupId>org.postgresql</groupId>
+            <!-- ドライバのアーティファクト ID -->
+            <artifactId>postgresql</artifactId>
+            <!-- 実行時のみ必要なスコープ -->
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Lombok（ボイラープレート削減）機能 -->
+        <dependency>
+            <!-- Lombok のグループ ID -->
+            <groupId>org.projectlombok</groupId>
+            <!-- Lombok のアーティファクト ID -->
+            <artifactId>lombok</artifactId>
+            <!-- コンパイル時のみ必要なため optional 指定 -->
+            <optional>true</optional>
+        </dependency>
+
+        <!-- テスト関連の依存（JUnit 等を含む） -->
+        <dependency>
+            <!-- Spring Boot のグループ ID -->
+            <groupId>org.springframework.boot</groupId>
+            <!-- テストスターター -->
+            <artifactId>spring-boot-starter-test</artifactId>
+            <!-- テスト時のみ有効なスコープ -->
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <!-- ビルド設定 -->
+    <build>
+        <!-- 使用するプラグインの一覧 -->
+        <plugins>
+            <!-- Spring Boot 用の実行可能 JAR を作るプラグイン -->
+            <plugin>
+                <!-- プラグインのグループ ID -->
+                <groupId>org.springframework.boot</groupId>
+                <!-- プラグインのアーティファクト ID -->
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <!-- プラグインの設定 -->
+                <configuration>
+                    <!-- 成果物から Lombok を除外する -->
+                    <excludes>
+                        <!-- 除外対象の指定 -->
+                        <exclude>
+                            <!-- Lombok のグループ ID -->
+                            <groupId>org.projectlombok</groupId>
+                            <!-- Lombok のアーティファクト ID -->
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
