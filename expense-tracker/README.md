@@ -1,114 +1,103 @@
-# expense-tracker
+# expense-tracker（支出管理 API）
 
-個人の支出を記録・集計する家計簿アプリのバックエンド REST API です。
-カテゴリごとに支出を登録し、月次でカテゴリ別・総合計を集計できます。
+「いつ・何に・いくら使ったか」を記録して、月ごとに集計できる **家計簿アプリの裏側（バックエンド API）** です。
+画面はありません。スマホアプリや Web 画面などの「表側」から呼び出して使うことを想定した、データのやり取り専用のプログラムです。
 
-## 技術スタック
+> **API とは？**
+> アプリ同士がデータをやり取りするための「窓口」のことです。
+> この窓口に「この支出を登録して」「6月の合計を教えて」とお願いすると、結果が返ってきます。
+> やり取りは JSON という、人間にも読みやすいテキスト形式で行います。
 
-| 領域      | 採用技術                                         |
-|-----------|--------------------------------------------------|
-| 言語      | Java 21                                          |
-| FW        | Spring Boot 3.3.x（Web / Data JPA / Validation） |
-| DB        | PostgreSQL 16                                    |
-| ビルド    | Maven                                            |
-| 補助      | Lombok                                           |
-| インフラ  | Docker / docker-compose                          |
+---
 
-## クイックスタート
+## できること
 
-### Docker で起動（推奨）
+- **カテゴリ**（食費・交通費など、支出の分類）を登録・一覧表示する
+- **支出**（1280円のランチ など）を登録・一覧・更新・削除する
+- **月ごとの集計**（その月の合計金額と、カテゴリ別の内訳）を取得する
+
+### 登場する2つのデータ
+
+| データ | 意味 | 例 |
+|--------|------|-----|
+| カテゴリ | 支出を分類する名前 | 食費、交通費、娯楽費 |
+| 支出 | 1回の支払い記録 | 「6/9 にランチで 1280 円（食費）」 |
+
+支出は必ずどれか1つのカテゴリに属します。先にカテゴリを作ってから、支出を登録する流れです。
+
+---
+
+## 必要なもの
+
+- **Docker** と **Docker Compose**（これだけあれば、後述のコマンド1つで動きます）
+
+Docker を使わず手元で直接動かしたい場合は、別途 **Java 21** と **PostgreSQL 16** が必要です（→「Docker を使わずに動かす」参照）。
+
+---
+
+## 使ってみる（最短ルート）
+
+### 1. 起動する
+
+プロジェクトのフォルダ（この README がある場所）で、次のコマンドを1つ実行するだけです。
 
 ```bash
-# アプリ + DB をビルドして起動する
 docker compose up --build
 ```
 
-起動後、`http://localhost:8080` で API を待ち受けます。
-DB は PostgreSQL 16 が `db` サービスとして同時に起動します。
+これで **アプリ本体** と **データベース（PostgreSQL）** の2つが一緒に立ち上がります。
+`Started ExpenseTrackerApplication` のようなログが出れば準備完了です。
+窓口は **http://localhost:8080** で開いています。
 
-### ローカルで起動
+> 止めたいときは、ターミナルで `Ctrl + C` を押します。
 
-PostgreSQL を別途用意し、以下を実行します。
+### 2. カテゴリを作る
 
-```bash
-# 依存解決とビルド・起動
-./mvnw spring-boot:run
-# もしくは Maven がインストール済みなら
-mvn spring-boot:run
-```
-
-接続情報は環境変数 `SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` /
-`SPRING_DATASOURCE_PASSWORD` で上書きできます（既定値は `application.yml` を参照）。
-
-## API 一覧
-
-### カテゴリ
-
-| Method | Path               | 説明         | 成功 |
-|--------|--------------------|--------------|------|
-| POST   | `/api/categories`  | カテゴリ作成 | 201  |
-| GET    | `/api/categories`  | 一覧         | 200  |
-
-### 支出
-
-| Method | Path                                        | 説明                             | 成功 |
-|--------|---------------------------------------------|----------------------------------|------|
-| POST   | `/api/expenses`                             | 支出登録                         | 201  |
-| GET    | `/api/expenses?month=YYYY-MM&categoryId=`   | 一覧（月・カテゴリで絞込、任意） | 200  |
-| GET    | `/api/expenses/{id}`                        | 詳細                             | 200  |
-| PUT    | `/api/expenses/{id}`                        | 更新                             | 200  |
-| DELETE | `/api/expenses/{id}`                        | 削除                             | 204  |
-| GET    | `/api/expenses/summary?month=YYYY-MM`       | 月次集計（合計＋カテゴリ別）     | 200  |
-
-## エラーレスポンス
-
-すべての例外は `@RestControllerAdvice` で一元処理し、共通フォーマットで返します。
-
-```json
-{ "status": 400, "message": "amount: must be greater than 0" }
-```
-
-| 状況                   | ステータス |
-|------------------------|------------|
-| バリデーション違反     | 400        |
-| リソース未存在         | 404        |
-| カテゴリ名の重複       | 409        |
-
-## curl 例
+別のターミナルを開いて、`curl`（コマンドで API を呼ぶ道具）で試します。
 
 ```bash
-# カテゴリを作成する
 curl -X POST http://localhost:8080/api/categories \
   -H "Content-Type: application/json" \
   -d '{"name":"食費"}'
+```
 
-# カテゴリ一覧を取得する
-curl http://localhost:8080/api/categories
+成功すると、作られたカテゴリが返ってきます（`id` は自動で振られる番号）。
 
-# 支出を登録する
+```json
+{ "id": 1, "name": "食費" }
+```
+
+### 3. 支出を登録する
+
+さきほど作ったカテゴリの `id`（ここでは `1`）を指定して登録します。
+
+```bash
 curl -X POST http://localhost:8080/api/expenses \
   -H "Content-Type: application/json" \
   -d '{"amount":1280,"categoryId":1,"description":"ランチ","spentOn":"2026-06-09"}'
+```
 
-# 月とカテゴリで支出一覧を絞り込む
-curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
+返ってくる内容の例：
 
-# 支出の詳細を取得する
-curl http://localhost:8080/api/expenses/1
+```json
+{
+  "id": 1,
+  "amount": 1280,
+  "categoryId": 1,
+  "categoryName": "食費",
+  "description": "ランチ",
+  "spentOn": "2026-06-09",
+  "createdAt": "2026-06-09T12:30:00"
+}
+```
 
-# 支出を更新する
-curl -X PUT http://localhost:8080/api/expenses/1 \
-  -H "Content-Type: application/json" \
-  -d '{"amount":1500,"categoryId":1,"description":"ランチ（更新）","spentOn":"2026-06-09"}'
+### 4. 月の集計を見る
 
-# 支出を削除する
-curl -X DELETE http://localhost:8080/api/expenses/1
-
-# 月次集計を取得する
+```bash
 curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 ```
 
-### 月次集計レスポンス例
+その月の **合計** と **カテゴリ別の内訳** が返ってきます。
 
 ```json
 {
@@ -121,16 +110,139 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 }
 ```
 
-## 設計メモ
+---
 
-- エンティティは直接返さず、`record` + 静的ファクトリ `from()` で DTO へ変換します。
-- 金額は `BigDecimal` で扱い、`double` は使用しません。
-- 月次集計は JPQL の `GROUP BY` で実装し、アプリ側での集計や N+1 を避けます。
-- `month=YYYY-MM` はサービス層で月初〜翌月初の期間に変換して範囲検索します。
-- `spring.jpa.open-in-view: false`、`ddl-auto: update`（Flyway はスコープ外）。
+## API 一覧
 
-## レイヤ構成
+「Method」は操作の種類（GET＝取得、POST＝新規作成、PUT＝更新、DELETE＝削除）です。
+`{id}` の部分には実際の番号（例：`1`）を入れます。
+
+### カテゴリ
+
+| Method | パス | 何をする |
+|--------|------|----------|
+| POST   | `/api/categories` | カテゴリを作る |
+| GET    | `/api/categories` | カテゴリの一覧を見る |
+
+### 支出
+
+| Method | パス | 何をする |
+|--------|------|----------|
+| POST   | `/api/expenses` | 支出を登録する |
+| GET    | `/api/expenses` | 支出の一覧を見る（絞り込み可。下記参照） |
+| GET    | `/api/expenses/{id}` | 1件の支出の詳細を見る |
+| PUT    | `/api/expenses/{id}` | 支出の内容を書き換える |
+| DELETE | `/api/expenses/{id}` | 支出を削除する |
+| GET    | `/api/expenses/summary?month=YYYY-MM` | 月ごとの集計を見る |
+
+#### 支出一覧の絞り込み
+
+`GET /api/expenses` は、条件を付けて絞り込めます（どちらも省略可能）。
+
+- `month=2026-06` … 指定した月の支出だけに絞る
+- `categoryId=1` … 指定したカテゴリの支出だけに絞る
+
+```bash
+# 2026年6月の食費（カテゴリID=1）だけを見る
+curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
+```
+
+---
+
+## 入力のルール（バリデーション）
+
+おかしなデータを防ぐため、登録・更新時に次のチェックをします。違反するとエラーになります。
+
+| 項目 | ルール |
+|------|--------|
+| `amount`（金額） | 必須。**0 より大きい** 数字 |
+| `categoryId` | 必須。**実在するカテゴリの番号** であること |
+| `spentOn`（支出日） | 必須。`YYYY-MM-DD` 形式。**未来の日付は不可** |
+| `description`（メモ） | 任意。255 文字まで |
+| カテゴリの `name` | 必須。50 文字まで。**同じ名前は登録不可**（重複禁止） |
+
+> 金額は小数も扱えます。内部では誤差の出ない方式（`BigDecimal`）で計算しているので、お金の集計がズレません。
+
+---
+
+## エラーが返ってきたら
+
+エラーのときは、どんな問題かが分かる共通フォーマットで返ってきます。
+
+```json
+{ "status": 400, "message": "amount: must be greater than 0" }
+```
+
+`status` の数字の意味：
+
+| 番号 | 意味 | 例 |
+|------|------|-----|
+| 400 | 入力がルール違反 | 金額が 0 以下、日付の形式ミス など |
+| 404 | 対象が見つからない | 存在しないカテゴリ番号や支出番号を指定した |
+| 409 | 重複している | すでにある名前のカテゴリを作ろうとした |
+
+---
+
+## Docker を使わずに動かす
+
+手元に **Java 21** と **PostgreSQL 16** を用意できる場合は、直接起動できます。
+
+```bash
+# Maven のラッパー（同梱）で起動
+./mvnw spring-boot:run
+```
+
+データベースの接続先は、次の環境変数で上書きできます（指定しなければ `application.yml` の初期値を使います）。
+
+| 環境変数 | 意味 |
+|----------|------|
+| `SPRING_DATASOURCE_URL` | 接続先（例：`jdbc:postgresql://localhost:5432/expensetracker`） |
+| `SPRING_DATASOURCE_USERNAME` | ユーザー名 |
+| `SPRING_DATASOURCE_PASSWORD` | パスワード |
+
+> 設定ファイルや docker-compose に書かれているユーザー名・パスワードは **ローカルでお試しするための初期値** です。本番では必ず変更してください。
+
+---
+
+## 使っている技術
+
+| 分野 | 採用技術 | ひとことで言うと |
+|------|----------|------------------|
+| 言語 | Java 21 | プログラム本体を書く言語 |
+| フレームワーク | Spring Boot 3.3 | Web API を手早く作るための土台 |
+| データベース | PostgreSQL 16 | 支出データを保存する場所 |
+| ビルド | Maven | ソースから実行ファイルを組み立てる道具 |
+| 補助 | Lombok | 定型コードを自動生成して短く書く道具 |
+| 実行環境 | Docker / docker-compose | アプリと DB をまとめて起動する仕組み |
+
+---
+
+## 中身の構成（開発者向け）
+
+役割ごとにフォルダを分けています。
 
 ```
-controller / service / repository / domain / dto(request・response) / exception
+controller  … 外からのリクエストの受付窓口
+service     … 業務ロジック（集計や検証など）
+repository  … データベースとのやり取り
+domain      … データの形（カテゴリ・支出）
+dto         … 外部とやり取りする入出力の形（request / response）
+exception   … エラー処理
 ```
+
+### 設計のポイント
+
+- **データの内部形（エンティティ）をそのまま返さず、専用の入出力形（DTO）に変換**して返します。内部構造が外に漏れず、安全です。
+- **月の集計はデータベース側でまとめて計算**（SQL の `GROUP BY`）。アプリ側で1件ずつ足し算しないので速く、無駄な問い合わせ（N+1）も起きません。
+- **`month=YYYY-MM` は「その月の初日〜翌月の初日の手前」**という期間に変換して検索します。
+- 金額は `BigDecimal`（小数の誤差が出ない型）で扱います。
+
+---
+
+## このプロジェクトで学べること
+
+- REST API の基本（取得・作成・更新・削除をひと通り）
+- データベースでの集計（`GROUP BY`）
+- お金を正確に扱う作法（`BigDecimal`）
+- 日付・期間での絞り込みと、URL のパラメータ設計
+- 入力チェックとエラー処理を1か所にまとめる方法
