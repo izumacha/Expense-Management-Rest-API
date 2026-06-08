@@ -22,6 +22,7 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
     // 期間とカテゴリ（いずれも任意）で支出を絞り込む一覧クエリ
     @Query("""
             SELECT e FROM Expense e
+            JOIN FETCH e.category
             WHERE (:start IS NULL OR e.spentOn >= :start)
               AND (:end IS NULL OR e.spentOn < :end)
               AND (:categoryId IS NULL OR e.category.id = :categoryId)

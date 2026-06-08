@@ -71,10 +71,12 @@ public class ExpenseService {
     // 月とカテゴリ（いずれも任意）で支出一覧を取得する
     @Transactional(readOnly = true)
     public List<ExpenseResponse> search(String month, Long categoryId) {
-        // month が指定されていれば月初を、無ければ null を期間開始とする
-        LocalDate start = (month == null) ? null : parseMonth(month).atDay(1);
-        // month が指定されていれば翌月初を、無ければ null を期間終了とする
-        LocalDate end = (month == null) ? null : parseMonth(month).plusMonths(1).atDay(1);
+        // month が指定されていれば一度だけパースし、無ければ null とする
+        YearMonth target = (month == null) ? null : parseMonth(month);
+        // 月初を期間開始とする（month 未指定なら null）
+        LocalDate start = (target == null) ? null : target.atDay(1);
+        // 翌月初を期間終了とする（month 未指定なら null）
+        LocalDate end = (target == null) ? null : target.plusMonths(1).atDay(1);
         // 条件で絞り込んだ支出を取得して DTO へ変換する
         return expenseRepository.search(start, end, categoryId).stream()
                 // 各エンティティを DTO へ変換する

@@ -11,6 +11,8 @@ import com.izumacha.expensetracker.dto.response.CategoryResponse;
 import com.izumacha.expensetracker.exception.DuplicateException;
 // カテゴリリポジトリを参照する
 import com.izumacha.expensetracker.repository.CategoryRepository;
+// 一意制約違反を検出する例外
+import org.springframework.dao.DataIntegrityViolationException;
 // 一覧の戻り型
 import java.util.List;
 // DTO への変換に使う Stream 収集
@@ -43,10 +45,16 @@ public class CategoryService {
         }
         // リクエストからエンティティを生成する
         Category category = new Category(request.name());
-        // エンティティを保存して採番済みのインスタンスを取得する
-        Category saved = categoryRepository.save(category);
-        // 保存結果を DTO に変換して返す
-        return CategoryResponse.from(saved);
+        // 事前チェックをすり抜けた同時実行の重複は一意制約違反として捕捉する
+        try {
+            // エンティティを保存して採番済みのインスタンスを取得する
+            Category saved = categoryRepository.save(category);
+            // 保存結果を DTO に変換して返す
+            return CategoryResponse.from(saved);
+        } catch (DataIntegrityViolationException e) {
+            // DB の一意制約違反を 409 相当の重複例外へ変換する
+            throw new DuplicateException("category name already exists: " + request.name());
+        }
     }
 
     // カテゴリ一覧を取得する
