@@ -9,6 +9,8 @@ import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
+// 外部向けエラーメッセージ定数を参照する
+import com.izumacha.expensetracker.exception.ErrorMessages;
 // カテゴリリポジトリを参照する
 import com.izumacha.expensetracker.repository.CategoryRepository;
 // 一意制約違反を検出する例外
@@ -40,8 +42,8 @@ public class CategoryService {
     public CategoryResponse create(CreateCategoryRequest request) {
         // 同名カテゴリが既に存在する場合は重複例外を投げる（409）
         if (categoryRepository.existsByName(request.name())) {
-            // 重複を示す例外を送出する
-            throw new DuplicateException("category name already exists: " + request.name());
+            // 入力値を含めない安全な文言で重複を示す例外を送出する
+            throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
         }
         // リクエストからエンティティを生成する
         Category category = new Category(request.name());
@@ -52,8 +54,8 @@ public class CategoryService {
             // 保存結果を DTO に変換して返す
             return CategoryResponse.from(saved);
         } catch (DataIntegrityViolationException e) {
-            // DB の一意制約違反を 409 相当の重複例外へ変換する
-            throw new DuplicateException("category name already exists: " + request.name());
+            // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する
+            throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
         }
     }
 

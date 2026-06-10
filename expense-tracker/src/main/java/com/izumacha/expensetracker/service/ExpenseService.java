@@ -13,6 +13,10 @@ import com.izumacha.expensetracker.dto.response.CategorySummary;
 import com.izumacha.expensetracker.dto.response.ExpenseResponse;
 // 月次集計返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
+// 外部向けエラーメッセージ定数を参照する
+import com.izumacha.expensetracker.exception.ErrorMessages;
+// クライアント起因の不正リクエスト例外を参照する
+import com.izumacha.expensetracker.exception.InvalidRequestException;
 // 未存在例外を参照する
 import com.izumacha.expensetracker.exception.NotFoundException;
 // カテゴリリポジトリを参照する
@@ -153,16 +157,16 @@ public class ExpenseService {
     private Category findCategoryOrThrow(Long categoryId) {
         // ID でカテゴリを検索し、無ければ例外を送出する
         return categoryRepository.findById(categoryId)
-                // 見つからない場合は未存在例外を投げる
-                .orElseThrow(() -> new NotFoundException("category not found: id=" + categoryId));
+                // 見つからない場合は内部 ID を含めない安全な文言で未存在例外を投げる
+                .orElseThrow(() -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND));
     }
 
     // 支出を取得し、無ければ404例外を投げる
     private Expense findExpenseOrThrow(Long id) {
         // ID で支出を検索し、無ければ例外を送出する
         return expenseRepository.findById(id)
-                // 見つからない場合は未存在例外を投げる
-                .orElseThrow(() -> new NotFoundException("expense not found: id=" + id));
+                // 見つからない場合は内部 ID を含めない安全な文言で未存在例外を投げる
+                .orElseThrow(() -> new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND));
     }
 
     // YYYY-MM 形式の文字列を YearMonth に変換する
@@ -172,8 +176,8 @@ public class ExpenseService {
             // 文字列を年月としてパースする
             return YearMonth.parse(month);
         } catch (DateTimeParseException e) {
-            // 形式不正を表す例外へ変換して送出する
-            throw new IllegalArgumentException("invalid month format (expected YYYY-MM): " + month);
+            // 生の入力値を外部に返さない安全な文言へ変換し、原因例外は追跡用に連鎖させる（外部公開して安全な400例外）
+            throw new InvalidRequestException(ErrorMessages.INVALID_MONTH_FORMAT, e);
         }
     }
 }
