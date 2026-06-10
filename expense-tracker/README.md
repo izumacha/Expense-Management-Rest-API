@@ -47,18 +47,17 @@ Docker を使わず手元で直接動かしたい場合は、別途 **Java 21** 
 
 ### 0. 環境変数を用意する
 
-このアプリは **API キー** と **DB パスワード** を環境変数で受け取ります（未設定だと安全側に倒して起動しません）。
+このアプリは **DB パスワード** を環境変数で受け取ります（未設定だと安全側に倒して起動しません）。
 同梱の `.env.example` をコピーして `.env` を作り、値を設定してください（`.env` はコミットしないこと）。
 
 ```bash
 cp .env.example .env
-# .env を開き、SPRING_DATASOURCE_PASSWORD と APP_API_KEY に好きな値を設定する
+# .env を開き、SPRING_DATASOURCE_PASSWORD に好きな値を設定する
 ```
 
 | 変数 | 必須 | 説明 |
 |------|------|------|
 | `SPRING_DATASOURCE_PASSWORD` | 必須 | データベースのパスワード |
-| `APP_API_KEY` | 必須 | API 呼び出し時に必要な合言葉（リクエストヘッダ `X-API-Key` で送る） |
 | `SPRING_DATASOURCE_USERNAME` | 任意 | DB ユーザー名（未設定なら `expensetracker`） |
 
 ### 1. 起動する
@@ -78,12 +77,10 @@ docker compose up --build
 ### 2. カテゴリを作る
 
 別のターミナルを開いて、`curl`（コマンドで API を呼ぶ道具）で試します。
-**すべてのリクエストに `X-API-Key` ヘッダ**（`.env` で設定した `APP_API_KEY` の値）を付けます。
 
 ```bash
 curl -X POST http://localhost:8080/api/categories \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: ここに APP_API_KEY の値" \
   -d '{"name":"食費"}'
 ```
 
@@ -100,7 +97,6 @@ curl -X POST http://localhost:8080/api/categories \
 ```bash
 curl -X POST http://localhost:8080/api/expenses \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: ここに APP_API_KEY の値" \
   -d '{"amount":1280,"categoryId":1,"description":"ランチ","spentOn":"2026-06-09"}'
 ```
 
@@ -121,8 +117,7 @@ curl -X POST http://localhost:8080/api/expenses \
 ### 4. 月の集計を見る
 
 ```bash
-curl -H "X-API-Key: ここに APP_API_KEY の値" \
-  "http://localhost:8080/api/expenses/summary?month=2026-06"
+curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 ```
 
 その月の **合計** と **カテゴリ別の内訳** が返ってきます。
@@ -144,7 +139,6 @@ curl -H "X-API-Key: ここに APP_API_KEY の値" \
 
 「Method」は操作の種類（GET＝取得、POST＝新規作成、PUT＝更新、DELETE＝削除）です。
 `{id}` の部分には実際の番号（例：`1`）を入れます。
-**すべてのエンドポイントに `X-API-Key` ヘッダ（合言葉）が必要**です。無い・誤っていると `401` を返します。
 
 ### カテゴリ
 
@@ -152,8 +146,6 @@ curl -H "X-API-Key: ここに APP_API_KEY の値" \
 |--------|------|----------|
 | POST   | `/api/categories` | カテゴリを作る |
 | GET    | `/api/categories` | カテゴリの一覧を見る（ページ単位。下記参照） |
-| PUT    | `/api/categories/{id}` | カテゴリ名を書き換える |
-| DELETE | `/api/categories/{id}` | カテゴリを削除する（支出が紐づく場合は `409` で拒否） |
 
 ### 支出
 
@@ -184,8 +176,7 @@ curl -H "X-API-Key: ここに APP_API_KEY の値" \
 
 ```bash
 # 2026年6月の食費（カテゴリID=1）だけを、1ページ10件で見る
-curl -H "X-API-Key: ここに APP_API_KEY の値" \
-  "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
+curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
 ```
 
 ---
@@ -219,22 +210,29 @@ curl -H "X-API-Key: ここに APP_API_KEY の値" \
 | 番号 | 意味 | 例 |
 |------|------|-----|
 | 400 | 入力がルール違反 | 金額が 0 以下、日付の形式ミス など |
-| 401 | 認証に失敗 | `X-API-Key` ヘッダが無い・誤っている |
 | 404 | 対象が見つからない | 存在しないカテゴリ番号や支出番号を指定した |
-| 409 | 競合している | すでにある名前のカテゴリを作る／支出が紐づくカテゴリを削除しようとした |
+| 409 | 重複している | すでにある名前のカテゴリを作ろうとした |
 | 429 | アクセスが多すぎる | 短時間に大量のリクエストを送った（レート制限） |
+
+---
+
+## 既知の制約・今後の課題
+
+本リポジトリは MVP（最小構成）です。以下は**意図的に未実装**で、今後の課題として整理しています。
+
+- **認証・認可**: 現状は単一利用者向けで、エンドポイントに認証はありません。公開・マルチユーザ化の際は、API キーや JWT などの認証と所有者単位のデータ分離を別途導入する必要があります。
+- **カテゴリの更新・削除 API**: 現状はカテゴリの作成・一覧のみです。更新・削除を追加する場合は、支出が紐づくカテゴリの扱い（削除禁止 or カスケード）の仕様を定義したうえで実装します。
 
 ---
 
 ## Docker を使わずに動かす
 
 手元に **Java 21** と **PostgreSQL 16** を用意できる場合は、直接起動できます。
-**起動前に `SPRING_DATASOURCE_PASSWORD` と `APP_API_KEY` を必ず設定**してください（未設定だと安全側に倒して起動しません）。
+**起動前に `SPRING_DATASOURCE_PASSWORD` を必ず設定**してください（未設定だと安全側に倒して起動しません）。
 
 ```bash
 # 必須の環境変数を設定してから起動する
 export SPRING_DATASOURCE_PASSWORD=お好きなパスワード
-export APP_API_KEY=お好きな合言葉
 # Maven のラッパー（同梱）で起動
 ./mvnw spring-boot:run
 ```
@@ -244,12 +242,12 @@ export APP_API_KEY=お好きな合言葉
 | 環境変数 | 必須 | 意味 |
 |----------|------|------|
 | `SPRING_DATASOURCE_PASSWORD` | 必須 | パスワード（未設定なら起動しない） |
-| `APP_API_KEY` | 必須 | API の合言葉（未設定なら起動しない） |
 | `SPRING_DATASOURCE_URL` | 任意 | 接続先（例：`jdbc:postgresql://localhost:5432/expensetracker`） |
 | `SPRING_DATASOURCE_USERNAME` | 任意 | ユーザー名（未設定なら `expensetracker`） |
 | `SPRING_JPA_HIBERNATE_DDL_AUTO` | 任意 | スキーマ反映方針。本番は `validate` 推奨（既定は開発用の `update`） |
+| `SPRING_JPA_SHOW_SQL` | 任意 | SQL ログ出力（既定 `false`。デバッグ時のみ `true`） |
 
-> パスワードや API キーは秘密情報です。コードや docker-compose に直接書かず、環境変数や `.env` で渡してください（`.env` はコミットしない）。本番では推測されにくい値を設定してください。
+> パスワードは秘密情報です。コードや docker-compose に直接書かず、環境変数や `.env` で渡してください（`.env` はコミットしない）。本番では推測されにくい値を設定してください。
 
 ---
 
@@ -343,18 +341,17 @@ If you prefer to run it directly without Docker, you'll separately need **Java 2
 
 ### 0. Set up environment variables
 
-This app reads an **API key** and the **DB password** from environment variables (it fails to start if they are missing, by design).
-Copy the bundled `.env.example` to `.env` and fill in the values (never commit `.env`).
+This app reads the **DB password** from an environment variable (it fails to start if it is missing, by design).
+Copy the bundled `.env.example` to `.env` and fill in the value (never commit `.env`).
 
 ```bash
 cp .env.example .env
-# Open .env and set SPRING_DATASOURCE_PASSWORD and APP_API_KEY to values of your choice
+# Open .env and set SPRING_DATASOURCE_PASSWORD to a value of your choice
 ```
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `SPRING_DATASOURCE_PASSWORD` | Yes | Database password |
-| `APP_API_KEY` | Yes | Shared secret required on every call (sent via the `X-API-Key` header) |
 | `SPRING_DATASOURCE_USERNAME` | No | DB user name (defaults to `expensetracker`) |
 
 ### 1. Start it
@@ -374,12 +371,10 @@ The window is open at **http://localhost:8080**.
 ### 2. Create a category
 
 Open another terminal and try it with `curl` (a tool for calling an API from the command line).
-**Every request needs an `X-API-Key` header** (the `APP_API_KEY` value you set in `.env`).
 
 ```bash
 curl -X POST http://localhost:8080/api/categories \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your APP_API_KEY value" \
   -d '{"name":"Food"}'
 ```
 
@@ -396,7 +391,6 @@ Specify the `id` of the category you just created (here, `1`).
 ```bash
 curl -X POST http://localhost:8080/api/expenses \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your APP_API_KEY value" \
   -d '{"amount":1280,"categoryId":1,"description":"Lunch","spentOn":"2026-06-09"}'
 ```
 
@@ -417,8 +411,7 @@ Example of what comes back:
 ### 4. View the monthly summary
 
 ```bash
-curl -H "X-API-Key: your APP_API_KEY value" \
-  "http://localhost:8080/api/expenses/summary?month=2026-06"
+curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 ```
 
 It returns that month's **total** and a **per-category breakdown**.
@@ -440,7 +433,6 @@ It returns that month's **total** and a **per-category breakdown**.
 
 "Method" is the kind of operation (GET = read, POST = create, PUT = update, DELETE = delete).
 Replace `{id}` with an actual number (e.g. `1`).
-**Every endpoint requires an `X-API-Key` header** (the shared secret). A missing or wrong key returns `401`.
 
 ### Categories
 
@@ -448,8 +440,6 @@ Replace `{id}` with an actual number (e.g. `1`).
 |--------|------|--------------|
 | POST   | `/api/categories` | Create a category |
 | GET    | `/api/categories` | List categories (paginated; see below) |
-| PUT    | `/api/categories/{id}` | Rename a category |
-| DELETE | `/api/categories/{id}` | Delete a category (refused with `409` if expenses reference it) |
 
 ### Expenses
 
@@ -480,8 +470,7 @@ Besides `content` (the array of items), the response includes `page` / `size` / 
 
 ```bash
 # Only Food (category ID = 1) expenses in June 2026, 10 per page
-curl -H "X-API-Key: your APP_API_KEY value" \
-  "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
+curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
 ```
 
 ---
@@ -515,22 +504,29 @@ What the `status` number means:
 | Code | Meaning | Example |
 |------|---------|---------|
 | 400 | Input breaks a rule | Amount ≤ 0, malformed date, etc. |
-| 401 | Authentication failed | The `X-API-Key` header is missing or wrong |
 | 404 | Target not found | A category/expense number that doesn't exist |
-| 409 | Conflict | A category name already exists, or deleting a category that has expenses |
+| 409 | Conflict (duplicate) | Trying to create a category whose name already exists |
 | 429 | Too many requests | Too many requests in a short time (rate limit) |
+
+---
+
+## Known limitations / future work
+
+This repository is an MVP. The following are **intentionally not implemented** and tracked as future work.
+
+- **Authentication / authorization**: The API is currently single-user and has no auth on its endpoints. Before going public or multi-user, add authentication (API key, JWT, etc.) and per-owner data isolation.
+- **Category update / delete API**: Only create and list are provided for categories. Adding update/delete requires first defining how categories that have expenses are handled (block deletion vs. cascade).
 
 ---
 
 ## Running without Docker
 
 If you can provide **Java 21** and **PostgreSQL 16** locally, you can start it directly.
-**Before starting, you must set `SPRING_DATASOURCE_PASSWORD` and `APP_API_KEY`** (it fails to start if they are missing, by design).
+**Before starting, you must set `SPRING_DATASOURCE_PASSWORD`** (it fails to start if it is missing, by design).
 
 ```bash
-# Set the required environment variables, then start
+# Set the required environment variable, then start
 export SPRING_DATASOURCE_PASSWORD=a-password-of-your-choice
-export APP_API_KEY=a-secret-of-your-choice
 # Start via the bundled Maven wrapper
 ./mvnw spring-boot:run
 ```
@@ -540,12 +536,12 @@ The connection and other settings can be overridden with these environment varia
 | Environment variable | Required | Meaning |
 |----------------------|----------|---------|
 | `SPRING_DATASOURCE_PASSWORD` | Yes | Password (app won't start if unset) |
-| `APP_API_KEY` | Yes | API shared secret (app won't start if unset) |
 | `SPRING_DATASOURCE_URL` | No | Connection target (e.g. `jdbc:postgresql://localhost:5432/expensetracker`) |
 | `SPRING_DATASOURCE_USERNAME` | No | Username (defaults to `expensetracker`) |
 | `SPRING_JPA_HIBERNATE_DDL_AUTO` | No | Schema strategy. Use `validate` in production (defaults to `update` for dev) |
+| `SPRING_JPA_SHOW_SQL` | No | SQL logging (defaults to `false`; set `true` only for debugging) |
 
-> Passwords and API keys are secrets. Don't hard-code them in source or docker-compose; pass them via environment variables or `.env` (never commit `.env`). Use hard-to-guess values in production.
+> The password is a secret. Don't hard-code it in source or docker-compose; pass it via an environment variable or `.env` (never commit `.env`). Use a hard-to-guess value in production.
 
 ---
 

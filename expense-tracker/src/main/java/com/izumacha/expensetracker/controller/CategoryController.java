@@ -1,7 +1,7 @@
 // コントローラパッケージ
 package com.izumacha.expensetracker.controller;
 
-// カテゴリ作成・更新リクエスト DTO を参照する
+// カテゴリ作成リクエスト DTO を参照する
 import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
@@ -19,16 +19,10 @@ import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 // HTTP レスポンス全体を表すクラス
 import org.springframework.http.ResponseEntity;
-// DELETE マッピング用アノテーション
-import org.springframework.web.bind.annotation.DeleteMapping;
 // GET マッピング用アノテーション
 import org.springframework.web.bind.annotation.GetMapping;
-// パス変数取得用アノテーション
-import org.springframework.web.bind.annotation.PathVariable;
 // POST マッピング用アノテーション
 import org.springframework.web.bind.annotation.PostMapping;
-// PUT マッピング用アノテーション
-import org.springframework.web.bind.annotation.PutMapping;
 // リクエストボディ取得用アノテーション
 import org.springframework.web.bind.annotation.RequestBody;
 // 共通パスを宣言するアノテーション
@@ -67,25 +61,5 @@ public class CategoryController {
             @PageableDefault(size = 20) Pageable pageable) {
         // サービスでカテゴリをページ単位で取得して返す
         return categoryService.findAll(pageable);
-    }
-
-    // カテゴリ名を更新する（成功時 200）
-    @PutMapping("/{id}")
-    public CategoryResponse update(
-            // 更新対象のカテゴリ ID
-            @PathVariable("id") Long id,
-            // 更新内容（検証付き）
-            @Valid @RequestBody CreateCategoryRequest request) {
-        // サービスでカテゴリ名を更新して返す
-        return categoryService.update(id, request);
-    }
-
-    // カテゴリを削除する（成功時 204）
-    @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable("id") Long id) {
-        // サービスでカテゴリを削除する
-        categoryService.delete(id);
-        // 204 No Content を返す
-        return ResponseEntity.noContent().build();
     }
 }

@@ -54,9 +54,6 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
             Pageable pageable
     );
 
-    // 指定カテゴリに紐づく支出が存在するかを判定する（カテゴリ削除可否の判断に使う）
-    boolean existsByCategoryId(Long categoryId);
-
     // 月次のカテゴリ別合計を GROUP BY で集計するクエリ
     @Query("""
             SELECT new com.izumacha.expensetracker.dto.response.CategorySummary(

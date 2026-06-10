@@ -53,8 +53,6 @@ services:
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-expensetracker}
       # 接続パスワード（.env から与える。未設定なら起動を失敗させる＝fail-closed）
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:?SPRING_DATASOURCE_PASSWORD を .env で設定してください}
-      # API キー（.env から与える。未設定なら起動を失敗させる＝fail-closed）
-      APP_API_KEY: ${APP_API_KEY:?APP_API_KEY を .env で設定してください}
     # ホストへ待受ポートを公開する
     ports:
       # ホスト 8080 をコンテナ 8080 に割り当てる

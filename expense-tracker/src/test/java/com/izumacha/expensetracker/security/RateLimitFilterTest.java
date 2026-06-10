@@ -64,15 +64,15 @@ class RateLimitFilterTest {
     @Test
     void 上限超過は429() throws Exception {
         // 1 回目（上限内）は 200 になることを検証する
-        mockMvc.perform(get("/api/categories").header("X-API-Key", "test-api-key"))
+        mockMvc.perform(get("/api/categories"))
                 // ステータスが 200 であることを検証する
                 .andExpect(status().isOk());
         // 2 回目（上限内）は 200 になることを検証する
-        mockMvc.perform(get("/api/categories").header("X-API-Key", "test-api-key"))
+        mockMvc.perform(get("/api/categories"))
                 // ステータスが 200 であることを検証する
                 .andExpect(status().isOk());
         // 3 回目（上限超過）は 429 になることを検証する
-        mockMvc.perform(get("/api/categories").header("X-API-Key", "test-api-key"))
+        mockMvc.perform(get("/api/categories"))
                 // ステータスが 429 であることを検証する
                 .andExpect(status().isTooManyRequests());
     }
