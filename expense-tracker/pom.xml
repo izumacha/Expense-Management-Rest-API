@@ -90,6 +90,36 @@
             <!-- テスト時のみ有効なスコープ -->
             <scope>test</scope>
         </dependency>
+
+        <!-- Testcontainers と Spring を連携し @ServiceConnection で DB 接続を自動配線する -->
+        <dependency>
+            <!-- Spring Boot のグループ ID -->
+            <groupId>org.springframework.boot</groupId>
+            <!-- Testcontainers 連携スターター -->
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <!-- テスト時のみ有効なスコープ -->
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Testcontainers を JUnit 5 と統合する（@Testcontainers / @Container 用） -->
+        <dependency>
+            <!-- Testcontainers のグループ ID -->
+            <groupId>org.testcontainers</groupId>
+            <!-- JUnit 5 連携モジュール（バージョンは親 POM の BOM が管理） -->
+            <artifactId>junit-jupiter</artifactId>
+            <!-- テスト時のみ有効なスコープ -->
+            <scope>test</scope>
+        </dependency>
+
+        <!-- PostgreSQL 用の使い捨てコンテナを提供する -->
+        <dependency>
+            <!-- Testcontainers のグループ ID -->
+            <groupId>org.testcontainers</groupId>
+            <!-- PostgreSQL モジュール（バージョンは親 POM の BOM が管理） -->
+            <artifactId>postgresql</artifactId>
+            <!-- テスト時のみ有効なスコープ -->
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <!-- ビルド設定 -->
