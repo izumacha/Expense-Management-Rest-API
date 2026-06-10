@@ -90,6 +90,16 @@
             <!-- テスト時のみ有効なスコープ -->
             <scope>test</scope>
         </dependency>
+
+        <!-- PostgreSQL 用の使い捨てコンテナを提供する（Testcontainers core を推移的に含む） -->
+        <dependency>
+            <!-- Testcontainers のグループ ID -->
+            <groupId>org.testcontainers</groupId>
+            <!-- PostgreSQL モジュール（バージョンは親 POM の BOM が管理） -->
+            <artifactId>postgresql</artifactId>
+            <!-- テスト時のみ有効なスコープ -->
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <!-- ビルド設定 -->

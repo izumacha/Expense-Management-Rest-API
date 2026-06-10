@@ -20,12 +20,15 @@ import org.springframework.data.repository.query.Param;
 public interface ExpenseRepository extends JpaRepository<Expense, Long> {
 
     // 期間とカテゴリ（いずれも任意）で支出を絞り込む一覧クエリ
+    // CAST(... AS 型) は IS NULL 側のパラメータに明示的な型を与えるための対策。
+    // PostgreSQL では「IS NULL でしか使われないバインド変数」は型を推論できず
+    // "could not determine data type" エラーになるため、エンティティ属性の型でキャストする。
     @Query("""
             SELECT e FROM Expense e
             JOIN FETCH e.category
-            WHERE (:start IS NULL OR e.spentOn >= :start)
-              AND (:end IS NULL OR e.spentOn < :end)
-              AND (:categoryId IS NULL OR e.category.id = :categoryId)
+            WHERE (CAST(:start AS LocalDate) IS NULL OR e.spentOn >= :start)
+              AND (CAST(:end AS LocalDate) IS NULL OR e.spentOn < :end)
+              AND (CAST(:categoryId AS Long) IS NULL OR e.category.id = :categoryId)
             ORDER BY e.spentOn DESC, e.id DESC
             """)
     List<Expense> search(
