@@ -14,6 +14,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 // 一覧の戻り型
 import java.util.List;
+// ページ単位の取得結果を表す型
+import org.springframework.data.domain.Page;
+// ページ指定（ページ番号・件数）を生成する型
+import org.springframework.data.domain.PageRequest;
 
 // テスト前処理を宣言するアノテーション
 import org.junit.jupiter.api.BeforeEach;
@@ -76,45 +80,61 @@ class ExpenseRepositoryTest extends AbstractRepositoryTest {
     // search: 期間もカテゴリも無指定なら全件を新しい順で返すことを検証する
     @Test
     void search_無指定なら全件を日付降順で返す() {
-        // 期間・カテゴリを指定せず検索する
-        List<Expense> result = expenseRepository.search(null, null, null);
+        // 期間・カテゴリを指定せず（十分大きいページで）検索する
+        Page<Expense> result = expenseRepository.search(null, null, null, PageRequest.of(0, 10));
 
         // 投入した 4 件すべてが返ることを検証する
-        assertThat(result).hasSize(4);
+        assertThat(result.getTotalElements()).isEqualTo(4);
         // 先頭が最新（7/1）であることを検証する（spentOn DESC）
-        assertThat(result.get(0).getSpentOn()).isEqualTo(LocalDate.of(2026, 7, 1));
+        assertThat(result.getContent().get(0).getSpentOn()).isEqualTo(LocalDate.of(2026, 7, 1));
         // JOIN FETCH によりカテゴリが取得済みであることを検証する
-        assertThat(result.get(0).getCategory().getName()).isNotNull();
+        assertThat(result.getContent().get(0).getCategory().getName()).isNotNull();
     }
 
     // search: 月で絞り込むとその月の支出だけが返ることを検証する
     @Test
     void search_月で絞ると当月分のみ返る() {
         // 6 月の期間（6/1 以上 7/1 未満）で検索する
-        List<Expense> result = expenseRepository.search(
+        Page<Expense> result = expenseRepository.search(
                 // 開始日（月初・含む）
                 LocalDate.of(2026, 6, 1),
                 // 終了日（翌月初・含まない）
                 LocalDate.of(2026, 7, 1),
                 // カテゴリ指定なし
-                null);
+                null,
+                // 十分大きいページ指定
+                PageRequest.of(0, 10));
 
         // 6 月分の 3 件だけが返ることを検証する
-        assertThat(result).hasSize(3);
+        assertThat(result.getTotalElements()).isEqualTo(3);
         // すべて 6 月であることを検証する
-        assertThat(result).allMatch(e -> e.getSpentOn().getMonthValue() == 6);
+        assertThat(result.getContent()).allMatch(e -> e.getSpentOn().getMonthValue() == 6);
     }
 
     // search: カテゴリで絞り込むとそのカテゴリの支出だけが返ることを検証する
     @Test
     void search_カテゴリで絞ると当該カテゴリのみ返る() {
         // 交通費カテゴリだけで検索する
-        List<Expense> result = expenseRepository.search(null, null, transport.getId());
+        Page<Expense> result = expenseRepository.search(null, null, transport.getId(), PageRequest.of(0, 10));
 
         // 交通費の 1 件だけが返ることを検証する
-        assertThat(result).hasSize(1);
+        assertThat(result.getTotalElements()).isEqualTo(1);
         // そのカテゴリ名が交通費であることを検証する
-        assertThat(result.get(0).getCategory().getName()).isEqualTo("交通費");
+        assertThat(result.getContent().get(0).getCategory().getName()).isEqualTo("交通費");
+    }
+
+    // search: ページサイズを指定すると件数が上限で制限され、総件数とページ数が正しいことを検証する
+    @Test
+    void search_ページサイズで件数が制限される() {
+        // 1 ページ 2 件で先頭ページを検索する
+        Page<Expense> result = expenseRepository.search(null, null, null, PageRequest.of(0, 2));
+
+        // 1 ページの件数が上限の 2 件であることを検証する
+        assertThat(result.getContent()).hasSize(2);
+        // 総件数は 4 件のままであることを検証する
+        assertThat(result.getTotalElements()).isEqualTo(4);
+        // 総ページ数が 2 ページであることを検証する
+        assertThat(result.getTotalPages()).isEqualTo(2);
     }
 
     // summarizeByCategory: カテゴリ別合計を金額降順で返すことを検証する

@@ -3,6 +3,8 @@ package com.izumacha.expensetracker.controller;
 
 // 支出返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.ExpenseResponse;
+// ページ形式の返却 DTO を参照する
+import com.izumacha.expensetracker.dto.response.PageResponse;
 // 月次集計返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
 // 未存在例外を参照する
@@ -21,6 +23,8 @@ import java.util.List;
 
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
+// MockMvc の自動設定（フィルタの有効・無効を制御する）アノテーション
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 // Web スライステストを有効化するアノテーション
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 // サービスをモック Bean として差し込むアノテーション
@@ -49,6 +53,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 // ExpenseController を Web スライスでテストする（サービスはモック）
 @WebMvcTest(ExpenseController.class)
+// 認証・レート制限フィルタは別テストで検証するため、ここでは無効化してコントローラの挙動に集中する
+@AutoConfigureMockMvc(addFilters = false)
 class ExpenseControllerTest {
 
     // 擬似 HTTP リクエストを送るクライアント
@@ -146,16 +152,22 @@ class ExpenseControllerTest {
                 .andExpect(status().isBadRequest());
     }
 
-    // GET: 一覧取得は 200 とサービス結果を返すことを検証する
+    // GET: 一覧取得は 200 とページ形式のサービス結果を返すことを検証する
     @Test
     void 支出一覧_200で返る() throws Exception {
-        // サービスが空リストを返すようモックする
-        when(expenseService.search(any(), any())).thenReturn(List.of());
+        // サービスが空のページを返すようモックする
+        when(expenseService.search(any(), any(), any()))
+                // 0 件・既定サイズ 20 の空ページを返す
+                .thenReturn(new PageResponse<>(List.of(), 0, 20, 0, 0));
 
         // 一覧エンドポイントへ GET する
         mockMvc.perform(get("/api/expenses"))
                 // ステータスが 200 であることを検証する
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                // 本体に content 配列が存在することを検証する
+                .andExpect(jsonPath("$.content").exists())
+                // 全件数が 0 であることを検証する
+                .andExpect(jsonPath("$.totalElements").value(0));
     }
 
     // GET /summary: month 指定で 200 と集計が返ることを検証する

@@ -68,9 +68,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(new ErrorResponse(HttpStatus.NOT_FOUND.value(), ex.getMessage()));
     }
 
-    // 重複（409）を処理するハンドラ
-    @ExceptionHandler(DuplicateException.class)
-    public ResponseEntity<ErrorResponse> handleDuplicate(DuplicateException ex) {
+    // 状態の競合（409）を処理するハンドラ。重複（DuplicateException）も ConflictException の一種なのでここで一括処理する
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ErrorResponse> handleConflict(ConflictException ex) {
         // 409 のエラーレスポンスを返す
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 // 本体にステータスと例外メッセージを格納する

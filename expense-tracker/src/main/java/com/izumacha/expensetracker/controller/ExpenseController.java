@@ -5,12 +5,18 @@ package com.izumacha.expensetracker.controller;
 import com.izumacha.expensetracker.dto.request.CreateExpenseRequest;
 // 支出返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.ExpenseResponse;
+// ページ形式の返却 DTO を参照する
+import com.izumacha.expensetracker.dto.response.PageResponse;
 // 月次集計返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
 // 支出サービスを参照する
 import com.izumacha.expensetracker.service.ExpenseService;
 // リクエストボディの検証を有効化するアノテーション
 import jakarta.validation.Valid;
+// ページ指定（ページ番号・件数）を表す型
+import org.springframework.data.domain.Pageable;
+// 一覧取得時の既定ページサイズを指定するアノテーション
+import org.springframework.data.web.PageableDefault;
 // HTTP ステータスを表す列挙
 import org.springframework.http.HttpStatus;
 // HTTP レスポンス全体を表すクラス
@@ -33,8 +39,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 // REST コントローラ宣言用アノテーション
 import org.springframework.web.bind.annotation.RestController;
-// 一覧の戻り型
-import java.util.List;
 
 // 支出関連のエンドポイントを提供するコントローラ
 @RestController
@@ -60,15 +64,17 @@ public class ExpenseController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    // 支出一覧を取得する（月・カテゴリで絞込、両方任意。成功時 200）
+    // 支出一覧をページ単位で取得する（月・カテゴリで絞込、両方任意。成功時 200）
     @GetMapping
-    public List<ExpenseResponse> list(
+    public PageResponse<ExpenseResponse> list(
             // 月（YYYY-MM）での絞り込み（任意）
             @RequestParam(value = "month", required = false) String month,
             // カテゴリ ID での絞り込み（任意）
-            @RequestParam(value = "categoryId", required = false) Long categoryId) {
-        // サービスで条件に合う支出を取得して返す
-        return expenseService.search(month, categoryId);
+            @RequestParam(value = "categoryId", required = false) Long categoryId,
+            // ページ指定（page / size。size 未指定時は既定 20。上限は application.yml で制限）
+            @PageableDefault(size = 20) Pageable pageable) {
+        // サービスで条件に合う支出をページ単位で取得して返す
+        return expenseService.search(month, categoryId, pageable);
     }
 
     // 月次集計を取得する（成功時 200）。一覧より先に固定パスを定義する

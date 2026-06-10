@@ -30,6 +30,10 @@ import java.time.LocalDate;
 import java.util.List;
 // 値が無いことを表す Optional 型
 import java.util.Optional;
+// ページ単位の取得結果を表す型
+import org.springframework.data.domain.Page;
+// ページ指定（ページ番号・件数）を生成する型
+import org.springframework.data.domain.PageRequest;
 
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
@@ -161,18 +165,18 @@ class ExpenseServiceTest {
     // search: month=null のとき期間は null のままリポジトリへ渡されることを検証する
     @Test
     void search_月未指定なら期間nullで全件問い合わせ() {
-        // リポジトリが空リストを返すようモックする
-        when(expenseRepository.search(any(), any(), any())).thenReturn(List.of());
+        // リポジトリが空ページを返すようモックする
+        when(expenseRepository.search(any(), any(), any(), any())).thenReturn(Page.empty());
 
-        // month も categoryId も指定せず検索する
-        expenseService.search(null, null);
+        // month も categoryId も指定せず（既定ページで）検索する
+        expenseService.search(null, null, PageRequest.of(0, 20));
 
         // 開始日を捕捉するキャプチャを用意する
         ArgumentCaptor<LocalDate> startCaptor = ArgumentCaptor.forClass(LocalDate.class);
         // 終了日を捕捉するキャプチャを用意する
         ArgumentCaptor<LocalDate> endCaptor = ArgumentCaptor.forClass(LocalDate.class);
-        // search 呼び出しの引数を捕捉する
-        verify(expenseRepository).search(startCaptor.capture(), endCaptor.capture(), any());
+        // search 呼び出しの引数を捕捉する（カテゴリ ID とページ指定は任意一致）
+        verify(expenseRepository).search(startCaptor.capture(), endCaptor.capture(), any(), any());
         // 開始日が null（無指定）であることを検証する
         assertThat(startCaptor.getValue()).isNull();
         // 終了日が null（無指定）であることを検証する
@@ -182,18 +186,18 @@ class ExpenseServiceTest {
     // search: month 指定時は月初〜翌月初の期間に変換されることを検証する
     @Test
     void search_月指定なら月初から翌月初の期間に変換() {
-        // リポジトリが空リストを返すようモックする
-        when(expenseRepository.search(any(), any(), any())).thenReturn(List.of());
+        // リポジトリが空ページを返すようモックする
+        when(expenseRepository.search(any(), any(), any(), any())).thenReturn(Page.empty());
 
-        // 2026-06 を指定して検索する
-        expenseService.search("2026-06", 1L);
+        // 2026-06 を指定して（既定ページで）検索する
+        expenseService.search("2026-06", 1L, PageRequest.of(0, 20));
 
         // 開始日を捕捉するキャプチャを用意する
         ArgumentCaptor<LocalDate> startCaptor = ArgumentCaptor.forClass(LocalDate.class);
         // 終了日を捕捉するキャプチャを用意する
         ArgumentCaptor<LocalDate> endCaptor = ArgumentCaptor.forClass(LocalDate.class);
-        // search 呼び出しの引数を捕捉する
-        verify(expenseRepository).search(startCaptor.capture(), endCaptor.capture(), any());
+        // search 呼び出しの引数を捕捉する（カテゴリ ID とページ指定は任意一致）
+        verify(expenseRepository).search(startCaptor.capture(), endCaptor.capture(), any(), any());
         // 開始日が月初（6/1）であることを検証する
         assertThat(startCaptor.getValue()).isEqualTo(LocalDate.of(2026, 6, 1));
         // 終了日が翌月初（7/1・含まない）であることを検証する
@@ -204,7 +208,7 @@ class ExpenseServiceTest {
     @Test
     void search_不正な月形式は400例外() {
         // 不正な月でsearchを呼ぶと例外になることを検証する
-        assertThatThrownBy(() -> expenseService.search("2026/06", null))
+        assertThatThrownBy(() -> expenseService.search("2026/06", null, PageRequest.of(0, 20)))
                 // 例外型が InvalidRequestException であることを確認する
                 .isInstanceOf(InvalidRequestException.class);
     }

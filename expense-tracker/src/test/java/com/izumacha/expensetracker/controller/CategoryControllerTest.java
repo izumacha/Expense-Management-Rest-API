@@ -3,6 +3,10 @@ package com.izumacha.expensetracker.controller;
 
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
+// ページ形式の返却 DTO を参照する
+import com.izumacha.expensetracker.dto.response.PageResponse;
+// 状態の競合（使用中カテゴリの削除）を表す例外を参照する
+import com.izumacha.expensetracker.exception.ConflictException;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
 // カテゴリサービスを参照する
@@ -13,6 +17,8 @@ import java.util.List;
 
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
+// MockMvc の自動設定（フィルタの有効・無効を制御する）アノテーション
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 // Web スライステストを有効化するアノテーション
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 // サービスをモック Bean として差し込むアノテーション
@@ -26,8 +32,14 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.mockito.ArgumentMatchers.any;
 // 戻り値を設定する when を取り込む（Mockito）
 import static org.mockito.Mockito.when;
+// 例外送出を設定する doThrow を取り込む（Mockito）
+import static org.mockito.Mockito.doThrow;
 // POST リクエストを組み立てる post を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+// PUT リクエストを組み立てる put を取り込む
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+// DELETE リクエストを組み立てる delete を取り込む
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 // GET リクエストを組み立てる get を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 // レスポンスのステータスを検証する status を取り込む
@@ -37,6 +49,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 // CategoryController を Web スライスでテストする（サービスはモック）
 @WebMvcTest(CategoryController.class)
+// 認証・レート制限フィルタは別テストで検証するため、ここでは無効化してコントローラの挙動に集中する
+@AutoConfigureMockMvc(addFilters = false)
 class CategoryControllerTest {
 
     // 擬似 HTTP リクエストを送るクライアント
@@ -125,19 +139,83 @@ class CategoryControllerTest {
                 .andExpect(jsonPath("$.status").value(409));
     }
 
-    // GET: 一覧取得は 200 とサービス結果を返すことを検証する
+    // GET: 一覧取得は 200 とページ形式のサービス結果を返すことを検証する
     @Test
     void カテゴリ一覧_200で返る() throws Exception {
-        // サービスが 1 件のカテゴリを返すようモックする
-        when(categoryService.findAll())
-                // 食費 1 件を返す
-                .thenReturn(List.of(new CategoryResponse(1L, "食費")));
+        // サービスが 1 件のカテゴリを含むページを返すようモックする
+        when(categoryService.findAll(any()))
+                // 食費 1 件・全 1 件のページを返す
+                .thenReturn(new PageResponse<>(List.of(new CategoryResponse(1L, "食費")), 0, 20, 1, 1));
 
         // 一覧エンドポイントへ GET する
         mockMvc.perform(get("/api/categories"))
                 // ステータスが 200 であることを検証する
                 .andExpect(status().isOk())
-                // 本体先頭の name が食費であることを検証する
-                .andExpect(jsonPath("$[0].name").value("食費"));
+                // 本体 content 先頭の name が食費であることを検証する
+                .andExpect(jsonPath("$.content[0].name").value("食費"));
+    }
+
+    // PUT: 正しい入力なら 200 と更新後の本体が返ることを検証する
+    @Test
+    void カテゴリ更新_正常時は200() throws Exception {
+        // サービスが更新後の DTO を返すようモックする
+        when(categoryService.update(any(), any()))
+                // 改名後（外食費）のカテゴリを返す
+                .thenReturn(new CategoryResponse(1L, "外食費"));
+
+        // 正しい JSON ボディで PUT する
+        mockMvc.perform(put("/api/categories/1")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 新しい名前を持つ本体を渡す
+                        .content("""
+                                {"name":"外食費"}
+                                """))
+                // ステータスが 200 であることを検証する
+                .andExpect(status().isOk())
+                // 本体の name が外食費であることを検証する
+                .andExpect(jsonPath("$.name").value("外食費"));
+    }
+
+    // PUT: 名前が空白なら検証で 400 になることを検証する
+    @Test
+    void カテゴリ更新_空白名は400() throws Exception {
+        // 空文字の名前で PUT する
+        mockMvc.perform(put("/api/categories/1")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 空の名前を持つ本体を渡す
+                        .content("""
+                                {"name":""}
+                                """))
+                // ステータスが 400 であることを検証する
+                .andExpect(status().isBadRequest());
+    }
+
+    // DELETE: 正常時は 204 No Content になることを検証する
+    @Test
+    void カテゴリ削除_正常時は204() throws Exception {
+        // サービスの delete は何もしない（既定で何もしないため明示のスタブは不要）
+
+        // 削除エンドポイントへ DELETE する
+        mockMvc.perform(delete("/api/categories/1"))
+                // ステータスが 204 であることを検証する
+                .andExpect(status().isNoContent());
+    }
+
+    // DELETE: 使用中カテゴリの削除はサービスの例外で 409 になることを検証する
+    @Test
+    void カテゴリ削除_使用中は409() throws Exception {
+        // delete が ConflictException を投げるようモックする
+        doThrow(new ConflictException("このカテゴリには支出が紐づいているため削除できません"))
+                // 対象のサービスメソッドを指定する
+                .when(categoryService).delete(1L);
+
+        // 使用中カテゴリの削除を DELETE する
+        mockMvc.perform(delete("/api/categories/1"))
+                // ステータスが 409 であることを検証する
+                .andExpect(status().isConflict())
+                // 本体の status フィールドが 409 であることを検証する
+                .andExpect(jsonPath("$.status").value(409));
     }
 }

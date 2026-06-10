@@ -11,6 +11,8 @@ import com.izumacha.expensetracker.dto.request.CreateExpenseRequest;
 import com.izumacha.expensetracker.dto.response.CategorySummary;
 // 支出返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.ExpenseResponse;
+// ページ形式の返却 DTO を参照する
+import com.izumacha.expensetracker.dto.response.PageResponse;
 // 月次集計返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
 // 外部向けエラーメッセージ定数を参照する
@@ -33,8 +35,10 @@ import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 // 一覧の戻り型
 import java.util.List;
-// DTO 変換に使う Stream 収集
-import java.util.stream.Collectors;
+// ページ単位の取得結果を表す型
+import org.springframework.data.domain.Page;
+// ページ指定（ページ番号・件数）を表す型
+import org.springframework.data.domain.Pageable;
 // Spring のサービスコンポーネント宣言
 import org.springframework.stereotype.Service;
 // トランザクション境界の宣言
@@ -72,21 +76,21 @@ public class ExpenseService {
         return ExpenseResponse.from(saved);
     }
 
-    // 月とカテゴリ（いずれも任意）で支出一覧を取得する
+    // 月とカテゴリ（いずれも任意）で支出一覧をページ単位で取得する
     @Transactional(readOnly = true)
-    public List<ExpenseResponse> search(String month, Long categoryId) {
+    public PageResponse<ExpenseResponse> search(String month, Long categoryId, Pageable pageable) {
         // month が指定されていれば一度だけパースし、無ければ null とする
         YearMonth target = (month == null) ? null : parseMonth(month);
         // 月初を期間開始とする（month 未指定なら null）
         LocalDate start = (target == null) ? null : target.atDay(1);
         // 翌月初を期間終了とする（month 未指定なら null）
         LocalDate end = (target == null) ? null : target.plusMonths(1).atDay(1);
-        // 条件で絞り込んだ支出を取得して DTO へ変換する
-        return expenseRepository.search(start, end, categoryId).stream()
-                // 各エンティティを DTO へ変換する
-                .map(ExpenseResponse::from)
-                // リストにまとめる
-                .collect(Collectors.toList());
+        // 条件で絞り込んだ支出をページ単位で取得する
+        Page<ExpenseResponse> page = expenseRepository.search(start, end, categoryId, pageable)
+                // 各エンティティを DTO へ変換する（ページ情報は維持する）
+                .map(ExpenseResponse::from);
+        // ページ情報を安定した契約の DTO へ詰め替えて返す
+        return PageResponse.from(page);
     }
 
     // 支出を1件取得する

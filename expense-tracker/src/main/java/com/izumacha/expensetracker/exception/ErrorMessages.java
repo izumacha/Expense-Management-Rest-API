@@ -35,4 +35,13 @@ public final class ErrorMessages {
 
     // 想定外のサーバ内部エラー時に返す汎用文言（内部詳細・スタックトレースは含めない）
     public static final String INTERNAL_ERROR = "サーバー内部でエラーが発生しました";
+
+    // API キーが無い・誤っているときの安全な文言（正解のキーや内部詳細は含めない）
+    public static final String UNAUTHORIZED = "認証に失敗しました（有効な API キーが必要です）";
+
+    // レート制限を超過したときの安全な文言（しきい値の詳細は含めない）
+    public static final String TOO_MANY_REQUESTS = "リクエストが多すぎます。しばらく待って再試行してください";
+
+    // 使用中（支出が紐づく）カテゴリを削除しようとしたときの安全な文言（内部 ID は含めない）
+    public static final String CATEGORY_IN_USE = "このカテゴリには支出が紐づいているため削除できません";
 }
