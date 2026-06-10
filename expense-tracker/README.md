@@ -45,6 +45,22 @@ Docker を使わず手元で直接動かしたい場合は、別途 **Java 21** 
 
 ## 使ってみる（最短ルート）
 
+### 0. 環境変数を用意する
+
+このアプリは **API キー** と **DB パスワード** を環境変数で受け取ります（未設定だと安全側に倒して起動しません）。
+同梱の `.env.example` をコピーして `.env` を作り、値を設定してください（`.env` はコミットしないこと）。
+
+```bash
+cp .env.example .env
+# .env を開き、SPRING_DATASOURCE_PASSWORD と APP_API_KEY に好きな値を設定する
+```
+
+| 変数 | 必須 | 説明 |
+|------|------|------|
+| `SPRING_DATASOURCE_PASSWORD` | 必須 | データベースのパスワード |
+| `APP_API_KEY` | 必須 | API 呼び出し時に必要な合言葉（リクエストヘッダ `X-API-Key` で送る） |
+| `SPRING_DATASOURCE_USERNAME` | 任意 | DB ユーザー名（未設定なら `expensetracker`） |
+
 ### 1. 起動する
 
 プロジェクトのフォルダ（この README がある場所）で、次のコマンドを1つ実行するだけです。
@@ -62,10 +78,12 @@ docker compose up --build
 ### 2. カテゴリを作る
 
 別のターミナルを開いて、`curl`（コマンドで API を呼ぶ道具）で試します。
+**すべてのリクエストに `X-API-Key` ヘッダ**（`.env` で設定した `APP_API_KEY` の値）を付けます。
 
 ```bash
 curl -X POST http://localhost:8080/api/categories \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: ここに APP_API_KEY の値" \
   -d '{"name":"食費"}'
 ```
 
@@ -82,6 +100,7 @@ curl -X POST http://localhost:8080/api/categories \
 ```bash
 curl -X POST http://localhost:8080/api/expenses \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: ここに APP_API_KEY の値" \
   -d '{"amount":1280,"categoryId":1,"description":"ランチ","spentOn":"2026-06-09"}'
 ```
 
@@ -102,7 +121,8 @@ curl -X POST http://localhost:8080/api/expenses \
 ### 4. 月の集計を見る
 
 ```bash
-curl "http://localhost:8080/api/expenses/summary?month=2026-06"
+curl -H "X-API-Key: ここに APP_API_KEY の値" \
+  "http://localhost:8080/api/expenses/summary?month=2026-06"
 ```
 
 その月の **合計** と **カテゴリ別の内訳** が返ってきます。
@@ -124,24 +144,36 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 
 「Method」は操作の種類（GET＝取得、POST＝新規作成、PUT＝更新、DELETE＝削除）です。
 `{id}` の部分には実際の番号（例：`1`）を入れます。
+**すべてのエンドポイントに `X-API-Key` ヘッダ（合言葉）が必要**です。無い・誤っていると `401` を返します。
 
 ### カテゴリ
 
 | Method | パス | 何をする |
 |--------|------|----------|
 | POST   | `/api/categories` | カテゴリを作る |
-| GET    | `/api/categories` | カテゴリの一覧を見る |
+| GET    | `/api/categories` | カテゴリの一覧を見る（ページ単位。下記参照） |
+| PUT    | `/api/categories/{id}` | カテゴリ名を書き換える |
+| DELETE | `/api/categories/{id}` | カテゴリを削除する（支出が紐づく場合は `409` で拒否） |
 
 ### 支出
 
 | Method | パス | 何をする |
 |--------|------|----------|
 | POST   | `/api/expenses` | 支出を登録する |
-| GET    | `/api/expenses` | 支出の一覧を見る（絞り込み可。下記参照） |
+| GET    | `/api/expenses` | 支出の一覧を見る（絞り込み・ページ単位。下記参照） |
 | GET    | `/api/expenses/{id}` | 1件の支出の詳細を見る |
 | PUT    | `/api/expenses/{id}` | 支出の内容を書き換える |
 | DELETE | `/api/expenses/{id}` | 支出を削除する |
 | GET    | `/api/expenses/summary?month=YYYY-MM` | 月ごとの集計を見る |
+
+#### 一覧のページ指定（ページネーション）
+
+一覧（`GET /api/expenses`・`GET /api/categories`）は、一度に返す件数を制限してページ単位で返します。
+
+- `page=0` … 何ページ目か（0 始まり・省略時は 0）
+- `size=20` … 1 ページの件数（省略時は 20・最大 100）
+
+返り値は `content`（要素の配列）に加え、`page` / `size` / `totalElements`（全件数）/ `totalPages`（全ページ数）を含みます。
 
 #### 支出一覧の絞り込み
 
@@ -151,8 +183,9 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 - `categoryId=1` … 指定したカテゴリの支出だけに絞る
 
 ```bash
-# 2026年6月の食費（カテゴリID=1）だけを見る
-curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
+# 2026年6月の食費（カテゴリID=1）だけを、1ページ10件で見る
+curl -H "X-API-Key: ここに APP_API_KEY の値" \
+  "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
 ```
 
 ---
@@ -163,9 +196,9 @@ curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
 
 | 項目 | ルール |
 |------|--------|
-| `amount`（金額） | 必須。**0 より大きい** 数字 |
+| `amount`（金額） | 必須。**0 より大きい** 数字。整数部 17 桁・小数部 2 桁まで（DB の精度に合わせる） |
 | `categoryId` | 必須。**実在するカテゴリの番号** であること |
-| `spentOn`（支出日） | 必須。`YYYY-MM-DD` 形式。**未来の日付は不可** |
+| `spentOn`（支出日） | 必須。`YYYY-MM-DD` 形式。**未来の日付は不可**（判定は日本時間 JST 基準） |
 | `description`（メモ） | 任意。255 文字まで |
 | カテゴリの `name` | 必須。50 文字まで。**同じ名前は登録不可**（重複禁止） |
 
@@ -186,29 +219,37 @@ curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
 | 番号 | 意味 | 例 |
 |------|------|-----|
 | 400 | 入力がルール違反 | 金額が 0 以下、日付の形式ミス など |
+| 401 | 認証に失敗 | `X-API-Key` ヘッダが無い・誤っている |
 | 404 | 対象が見つからない | 存在しないカテゴリ番号や支出番号を指定した |
-| 409 | 重複している | すでにある名前のカテゴリを作ろうとした |
+| 409 | 競合している | すでにある名前のカテゴリを作る／支出が紐づくカテゴリを削除しようとした |
+| 429 | アクセスが多すぎる | 短時間に大量のリクエストを送った（レート制限） |
 
 ---
 
 ## Docker を使わずに動かす
 
 手元に **Java 21** と **PostgreSQL 16** を用意できる場合は、直接起動できます。
+**起動前に `SPRING_DATASOURCE_PASSWORD` と `APP_API_KEY` を必ず設定**してください（未設定だと安全側に倒して起動しません）。
 
 ```bash
+# 必須の環境変数を設定してから起動する
+export SPRING_DATASOURCE_PASSWORD=お好きなパスワード
+export APP_API_KEY=お好きな合言葉
 # Maven のラッパー（同梱）で起動
 ./mvnw spring-boot:run
 ```
 
-データベースの接続先は、次の環境変数で上書きできます（指定しなければ `application.yml` の初期値を使います）。
+データベースの接続先などは、次の環境変数で上書きできます。
 
-| 環境変数 | 意味 |
-|----------|------|
-| `SPRING_DATASOURCE_URL` | 接続先（例：`jdbc:postgresql://localhost:5432/expensetracker`） |
-| `SPRING_DATASOURCE_USERNAME` | ユーザー名 |
-| `SPRING_DATASOURCE_PASSWORD` | パスワード |
+| 環境変数 | 必須 | 意味 |
+|----------|------|------|
+| `SPRING_DATASOURCE_PASSWORD` | 必須 | パスワード（未設定なら起動しない） |
+| `APP_API_KEY` | 必須 | API の合言葉（未設定なら起動しない） |
+| `SPRING_DATASOURCE_URL` | 任意 | 接続先（例：`jdbc:postgresql://localhost:5432/expensetracker`） |
+| `SPRING_DATASOURCE_USERNAME` | 任意 | ユーザー名（未設定なら `expensetracker`） |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | 任意 | スキーマ反映方針。本番は `validate` 推奨（既定は開発用の `update`） |
 
-> 設定ファイルや docker-compose に書かれているユーザー名・パスワードは **ローカルでお試しするための初期値** です。本番では必ず変更してください。
+> パスワードや API キーは秘密情報です。コードや docker-compose に直接書かず、環境変数や `.env` で渡してください（`.env` はコミットしない）。本番では推測されにくい値を設定してください。
 
 ---
 
@@ -300,6 +341,22 @@ If you prefer to run it directly without Docker, you'll separately need **Java 2
 
 ## Try it out (shortest path)
 
+### 0. Set up environment variables
+
+This app reads an **API key** and the **DB password** from environment variables (it fails to start if they are missing, by design).
+Copy the bundled `.env.example` to `.env` and fill in the values (never commit `.env`).
+
+```bash
+cp .env.example .env
+# Open .env and set SPRING_DATASOURCE_PASSWORD and APP_API_KEY to values of your choice
+```
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SPRING_DATASOURCE_PASSWORD` | Yes | Database password |
+| `APP_API_KEY` | Yes | Shared secret required on every call (sent via the `X-API-Key` header) |
+| `SPRING_DATASOURCE_USERNAME` | No | DB user name (defaults to `expensetracker`) |
+
 ### 1. Start it
 
 In the project folder (where this README lives), just run this one command.
@@ -317,10 +374,12 @@ The window is open at **http://localhost:8080**.
 ### 2. Create a category
 
 Open another terminal and try it with `curl` (a tool for calling an API from the command line).
+**Every request needs an `X-API-Key` header** (the `APP_API_KEY` value you set in `.env`).
 
 ```bash
 curl -X POST http://localhost:8080/api/categories \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your APP_API_KEY value" \
   -d '{"name":"Food"}'
 ```
 
@@ -337,6 +396,7 @@ Specify the `id` of the category you just created (here, `1`).
 ```bash
 curl -X POST http://localhost:8080/api/expenses \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your APP_API_KEY value" \
   -d '{"amount":1280,"categoryId":1,"description":"Lunch","spentOn":"2026-06-09"}'
 ```
 
@@ -357,7 +417,8 @@ Example of what comes back:
 ### 4. View the monthly summary
 
 ```bash
-curl "http://localhost:8080/api/expenses/summary?month=2026-06"
+curl -H "X-API-Key: your APP_API_KEY value" \
+  "http://localhost:8080/api/expenses/summary?month=2026-06"
 ```
 
 It returns that month's **total** and a **per-category breakdown**.
@@ -379,24 +440,36 @@ It returns that month's **total** and a **per-category breakdown**.
 
 "Method" is the kind of operation (GET = read, POST = create, PUT = update, DELETE = delete).
 Replace `{id}` with an actual number (e.g. `1`).
+**Every endpoint requires an `X-API-Key` header** (the shared secret). A missing or wrong key returns `401`.
 
 ### Categories
 
 | Method | Path | What it does |
 |--------|------|--------------|
 | POST   | `/api/categories` | Create a category |
-| GET    | `/api/categories` | List categories |
+| GET    | `/api/categories` | List categories (paginated; see below) |
+| PUT    | `/api/categories/{id}` | Rename a category |
+| DELETE | `/api/categories/{id}` | Delete a category (refused with `409` if expenses reference it) |
 
 ### Expenses
 
 | Method | Path | What it does |
 |--------|------|--------------|
 | POST   | `/api/expenses` | Register an expense |
-| GET    | `/api/expenses` | List expenses (filterable; see below) |
+| GET    | `/api/expenses` | List expenses (filterable & paginated; see below) |
 | GET    | `/api/expenses/{id}` | View one expense in detail |
 | PUT    | `/api/expenses/{id}` | Update an expense |
 | DELETE | `/api/expenses/{id}` | Delete an expense |
 | GET    | `/api/expenses/summary?month=YYYY-MM` | View the monthly summary |
+
+#### Pagination
+
+The list endpoints (`GET /api/expenses`, `GET /api/categories`) cap how many items they return and respond page by page.
+
+- `page=0` … which page (0-based; defaults to 0)
+- `size=20` … items per page (defaults to 20; max 100)
+
+Besides `content` (the array of items), the response includes `page` / `size` / `totalElements` / `totalPages`.
 
 #### Filtering the expense list
 
@@ -406,8 +479,9 @@ Replace `{id}` with an actual number (e.g. `1`).
 - `categoryId=1` … only expenses in the given category
 
 ```bash
-# Only Food (category ID = 1) expenses in June 2026
-curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
+# Only Food (category ID = 1) expenses in June 2026, 10 per page
+curl -H "X-API-Key: your APP_API_KEY value" \
+  "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
 ```
 
 ---
@@ -418,9 +492,9 @@ To prevent bad data, the following checks run on create/update. Violations retur
 
 | Field | Rule |
 |-------|------|
-| `amount` | Required. A number **greater than 0** |
+| `amount` | Required. A number **greater than 0**, up to 17 integer digits and 2 fraction digits (matches DB precision) |
 | `categoryId` | Required. Must be the number of an **existing category** |
-| `spentOn` (date) | Required. `YYYY-MM-DD` format. **Future dates not allowed** |
+| `spentOn` (date) | Required. `YYYY-MM-DD` format. **Future dates not allowed** (judged in JST) |
 | `description` (memo) | Optional. Up to 255 characters |
 | category `name` | Required. Up to 50 characters. **No duplicate names** allowed |
 
@@ -441,29 +515,37 @@ What the `status` number means:
 | Code | Meaning | Example |
 |------|---------|---------|
 | 400 | Input breaks a rule | Amount ≤ 0, malformed date, etc. |
+| 401 | Authentication failed | The `X-API-Key` header is missing or wrong |
 | 404 | Target not found | A category/expense number that doesn't exist |
-| 409 | Conflict (duplicate) | Trying to create a category whose name already exists |
+| 409 | Conflict | A category name already exists, or deleting a category that has expenses |
+| 429 | Too many requests | Too many requests in a short time (rate limit) |
 
 ---
 
 ## Running without Docker
 
 If you can provide **Java 21** and **PostgreSQL 16** locally, you can start it directly.
+**Before starting, you must set `SPRING_DATASOURCE_PASSWORD` and `APP_API_KEY`** (it fails to start if they are missing, by design).
 
 ```bash
+# Set the required environment variables, then start
+export SPRING_DATASOURCE_PASSWORD=a-password-of-your-choice
+export APP_API_KEY=a-secret-of-your-choice
 # Start via the bundled Maven wrapper
 ./mvnw spring-boot:run
 ```
 
-The database connection can be overridden with these environment variables (if unset, the defaults in `application.yml` are used).
+The connection and other settings can be overridden with these environment variables.
 
-| Environment variable | Meaning |
-|----------------------|---------|
-| `SPRING_DATASOURCE_URL` | Connection target (e.g. `jdbc:postgresql://localhost:5432/expensetracker`) |
-| `SPRING_DATASOURCE_USERNAME` | Username |
-| `SPRING_DATASOURCE_PASSWORD` | Password |
+| Environment variable | Required | Meaning |
+|----------------------|----------|---------|
+| `SPRING_DATASOURCE_PASSWORD` | Yes | Password (app won't start if unset) |
+| `APP_API_KEY` | Yes | API shared secret (app won't start if unset) |
+| `SPRING_DATASOURCE_URL` | No | Connection target (e.g. `jdbc:postgresql://localhost:5432/expensetracker`) |
+| `SPRING_DATASOURCE_USERNAME` | No | Username (defaults to `expensetracker`) |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | No | Schema strategy. Use `validate` in production (defaults to `update` for dev) |
 
-> The usernames/passwords written in the config file and docker-compose are **defaults for local trials**. Always change them in production.
+> Passwords and API keys are secrets. Don't hard-code them in source or docker-compose; pass them via environment variables or `.env` (never commit `.env`). Use hard-to-guess values in production.
 
 ---
 
