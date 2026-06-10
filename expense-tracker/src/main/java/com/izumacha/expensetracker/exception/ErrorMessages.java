@@ -26,8 +26,12 @@ public final class ErrorMessages {
     // パラメータの型が不正なときの文言の接頭辞（後ろにパラメータ名を付ける）
     public static final String INVALID_PARAMETER = "パラメータの形式が正しくありません: ";
 
-    // リクエスト自体が不正（不正 JSON・未対応メソッド等）なときの汎用的な安全文言
-    public static final String BAD_REQUEST = "リクエストの形式が正しくありません";
+    // リクエスト自体が不正（不正 JSON・未対応メソッド・未対応メディアタイプ等）なときの汎用的な安全文言
+    // ステータスを問わず誤誘導しないよう「形式」に限定しない中立な表現にする
+    public static final String BAD_REQUEST = "リクエストが正しくありません";
+
+    // 入力検証で個別のフィールドエラーが取得できなかった場合の汎用文言（§6 一元管理）
+    public static final String VALIDATION_ERROR = "入力値が正しくありません";
 
     // 想定外のサーバ内部エラー時に返す汎用文言（内部詳細・スタックトレースは含めない）
     public static final String INTERNAL_ERROR = "サーバー内部でエラーが発生しました";

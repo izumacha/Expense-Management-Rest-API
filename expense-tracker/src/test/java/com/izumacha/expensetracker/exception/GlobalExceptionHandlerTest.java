@@ -115,6 +115,38 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.message").value(ErrorMessages.INTERNAL_ERROR));
     }
 
+    // アプリ由来の InvalidRequestException は 400 と、送出側が指定した安全文言で返ることを検証する
+    @Test
+    void 不正リクエスト例外は400で安全文言() throws Exception {
+        // summary が月形式不正の InvalidRequestException を投げるようモックする
+        when(expenseService.summary("bad"))
+                // 外部公開して安全な文言を持つ不正リクエスト例外を投げる
+                .thenThrow(new InvalidRequestException(ErrorMessages.INVALID_MONTH_FORMAT));
+
+        // 不正な月を付けて集計エンドポイントへ GET する
+        mockMvc.perform(get("/api/expenses/summary").param("month", "bad"))
+                // ステータスが 400 であることを検証する
+                .andExpect(status().isBadRequest())
+                // 本体の message が送出側の安全文言であることを検証する
+                .andExpect(jsonPath("$.message").value(ErrorMessages.INVALID_MONTH_FORMAT));
+    }
+
+    // 想定外の IllegalArgumentException は 400 だが内部メッセージを返さず汎用文言になることを検証する
+    @Test
+    void 想定外のIllegalArgumentは400で汎用文言() throws Exception {
+        // search が内部詳細を含む IllegalArgumentException を投げるようモックする
+        when(expenseService.search(any(), any()))
+                // 内部詳細を含む例外を投げる（外部に漏れてはいけない）
+                .thenThrow(new IllegalArgumentException("internal detail: ownerId=42"));
+
+        // 一覧エンドポイントへ GET する
+        mockMvc.perform(get("/api/expenses"))
+                // ステータスが 400 であることを検証する
+                .andExpect(status().isBadRequest())
+                // 本体の message が汎用の安全文言（内部詳細を含まない）であることを検証する
+                .andExpect(jsonPath("$.message").value(ErrorMessages.BAD_REQUEST));
+    }
+
     // 不正な JSON ボディは 400 のまま（catch-all で 500 に退行しない）であることを検証する
     @Test
     void 不正なJSONは400のまま() throws Exception {

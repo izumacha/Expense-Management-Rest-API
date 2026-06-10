@@ -13,6 +13,8 @@ import com.izumacha.expensetracker.dto.response.CategorySummary;
 import com.izumacha.expensetracker.dto.response.ExpenseResponse;
 // 月次集計返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
+// クライアント起因の不正リクエスト例外を参照する
+import com.izumacha.expensetracker.exception.InvalidRequestException;
 // 未存在例外を参照する
 import com.izumacha.expensetracker.exception.NotFoundException;
 // カテゴリリポジトリを参照する
@@ -198,13 +200,13 @@ class ExpenseServiceTest {
         assertThat(endCaptor.getValue()).isEqualTo(LocalDate.of(2026, 7, 1));
     }
 
-    // search: 不正な月形式は IllegalArgumentException（400 相当）になることを検証する
+    // search: 不正な月形式は InvalidRequestException（400 相当）になることを検証する
     @Test
     void search_不正な月形式は400例外() {
         // 不正な月でsearchを呼ぶと例外になることを検証する
         assertThatThrownBy(() -> expenseService.search("2026/06", null))
-                // 例外型が IllegalArgumentException であることを確認する
-                .isInstanceOf(IllegalArgumentException.class);
+                // 例外型が InvalidRequestException であることを確認する
+                .isInstanceOf(InvalidRequestException.class);
     }
 
     // findById: 存在しない ID は NotFoundException になることを検証する
@@ -330,12 +332,12 @@ class ExpenseServiceTest {
         assertThat(response.byCategory()).hasSize(2);
     }
 
-    // summary: 不正な月形式は IllegalArgumentException（400 相当）になることを検証する
+    // summary: 不正な月形式は InvalidRequestException（400 相当）になることを検証する
     @Test
     void summary_不正な月形式は400例外() {
         // 不正な月で summary を呼ぶと例外になることを検証する
         assertThatThrownBy(() -> expenseService.summary("June"))
-                // 例外型が IllegalArgumentException であることを確認する
-                .isInstanceOf(IllegalArgumentException.class);
+                // 例外型が InvalidRequestException であることを確認する
+                .isInstanceOf(InvalidRequestException.class);
     }
 }

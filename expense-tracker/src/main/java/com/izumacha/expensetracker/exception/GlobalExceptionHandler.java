@@ -41,13 +41,22 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public record ErrorResponse(int status, String message) {
     }
 
-    // 不正な引数（例：月フォーマット不正）を400として処理するハンドラ
+    // アプリが明示的に投げる「外部公開して安全な」不正リクエスト例外（例：月フォーマット不正）を400として処理する
+    @ExceptionHandler(InvalidRequestException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidRequest(InvalidRequestException ex) {
+        // 400 のエラーレスポンスを返す（メッセージは送出側で安全性を保証している）
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                // 本体にステータスと安全なメッセージを格納する
+                .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(), ex.getMessage()));
+    }
+
+    // 想定外の IllegalArgumentException（フレームワーク／ライブラリ由来を含む）を400として処理するハンドラ
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
-        // 400 のエラーレスポンスを返す
+        // 例外メッセージには内部詳細が含まれうるため外部には出さず、汎用の安全文言だけを返す
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                // 本体にステータスと例外メッセージを格納する
-                .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(), ex.getMessage()));
+                // 本体にステータスと汎用の安全メッセージを格納する
+                .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(), ErrorMessages.BAD_REQUEST));
     }
 
     // リソース未存在（404）を処理するハンドラ
@@ -82,19 +91,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // DB アクセス障害（500）を処理するハンドラ。詳細はログにのみ残し、外部には汎用文言を返す
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<ErrorResponse> handleDataAccess(DataAccessException ex) {
-        // 障害の詳細はサーバログにだけ記録する（外部に内部情報を漏らさない）
-        log.error("データアクセス中に例外が発生しました", ex);
-        // 500 と汎用メッセージのエラーレスポンスを返す
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                // 本体にステータスと汎用の安全メッセージを格納する
-                .body(new ErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR.value(), ErrorMessages.INTERNAL_ERROR));
+        // 共通の 500 応答生成に委譲する（ログ記録＋汎用文言）
+        return internalError("データアクセス中に例外が発生しました", ex);
     }
 
     // 上記いずれにも当てはまらない想定外の実行時例外を500としてフォールバック処理するハンドラ
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex) {
-        // 想定外の例外の詳細はサーバログにだけ記録する（スタックトレースを外部に出さない）
-        log.error("想定外の例外が発生しました", ex);
+        // 共通の 500 応答生成に委譲する（ログ記録＋汎用文言）
+        return internalError("想定外の例外が発生しました", ex);
+    }
+
+    // 500 応答の生成を一元化する共通ヘルパー（詳細はサーバログのみ・外部には汎用文言のみ）
+    private ResponseEntity<ErrorResponse> internalError(String logMessage, Exception ex) {
+        // 障害の詳細はサーバログにだけ記録する（スタックトレース・内部情報を外部に出さない）
+        log.error(logMessage, ex);
         // 500 と汎用メッセージのエラーレスポンスを返す
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 // 本体にステータスと汎用の安全メッセージを格納する
@@ -118,8 +129,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         String message = fieldError
                 // フィールドエラーが存在する場合に整形する
                 .map(fe -> fe.getField() + ": " + fe.getDefaultMessage())
-                // 存在しない場合の既定メッセージ
-                .orElse("validation error");
+                // 存在しない場合の既定メッセージ（一元管理した汎用文言を使う）
+                .orElse(ErrorMessages.VALIDATION_ERROR);
         // 400 のエラーレスポンスを返す
         return ResponseEntity.status(status)
                 // 本体にステータスとメッセージを格納する

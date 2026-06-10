@@ -15,6 +15,8 @@ import com.izumacha.expensetracker.dto.response.ExpenseResponse;
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
 // 外部向けエラーメッセージ定数を参照する
 import com.izumacha.expensetracker.exception.ErrorMessages;
+// クライアント起因の不正リクエスト例外を参照する
+import com.izumacha.expensetracker.exception.InvalidRequestException;
 // 未存在例外を参照する
 import com.izumacha.expensetracker.exception.NotFoundException;
 // カテゴリリポジトリを参照する
@@ -174,8 +176,8 @@ public class ExpenseService {
             // 文字列を年月としてパースする
             return YearMonth.parse(month);
         } catch (DateTimeParseException e) {
-            // 生の入力値を外部に返さない安全な文言へ変換し、原因例外は追跡用に連鎖させる
-            throw new IllegalArgumentException(ErrorMessages.INVALID_MONTH_FORMAT, e);
+            // 生の入力値を外部に返さない安全な文言へ変換し、原因例外は追跡用に連鎖させる（外部公開して安全な400例外）
+            throw new InvalidRequestException(ErrorMessages.INVALID_MONTH_FORMAT, e);
         }
     }
 }
