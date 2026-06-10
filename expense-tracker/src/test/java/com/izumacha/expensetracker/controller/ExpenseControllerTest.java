@@ -174,13 +174,17 @@ class ExpenseControllerTest {
                 .andExpect(jsonPath("$.total").value(2000));
     }
 
-    // GET /summary: month 欠落は 400 になることを検証する（本体形状は未保証のためステータスのみ）
+    // GET /summary: month 欠落は 400 になり {status,message} 形式が返ることを検証する
     @Test
     void 月次集計_month欠落は400() throws Exception {
         // month を付けずに集計エンドポイントへ GET する
         mockMvc.perform(get("/api/expenses/summary"))
                 // ステータスが 400 であることを検証する
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                // 本体の status フィールドが 400 であることを検証する
+                .andExpect(jsonPath("$.status").value(400))
+                // 本体に message フィールドが存在することを検証する
+                .andExpect(jsonPath("$.message").exists());
     }
 
     // GET /{id}: 対象が無ければサービスの例外で 404 になることを検証する
