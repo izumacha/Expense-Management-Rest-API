@@ -10,6 +10,8 @@ import com.izumacha.expensetracker.service.ExpenseService;
 import org.junit.jupiter.api.Test;
 // 依存を注入するアノテーション
 import org.springframework.beans.factory.annotation.Autowired;
+// MockMvc の自動設定（フィルタの有効・無効を制御する）アノテーション
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 // Web スライステストを有効化するアノテーション
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 // サービスをモック Bean として差し込むアノテーション
@@ -34,6 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 // GlobalExceptionHandler の網羅した挙動を ExpenseController 経由で検証する
 @WebMvcTest(ExpenseController.class)
+// 認証・レート制限フィルタは別テストで検証するため、ここでは無効化して例外整形の挙動に集中する
+@AutoConfigureMockMvc(addFilters = false)
 class GlobalExceptionHandlerTest {
 
     // 擬似 HTTP リクエストを送るクライアント
@@ -85,7 +89,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void DBアクセス障害は500で汎用文言() throws Exception {
         // search が DB 障害例外を投げるようモックする
-        when(expenseService.search(any(), any()))
+        when(expenseService.search(any(), any(), any()))
                 // 内部詳細（接続先など）を含む例外を投げる
                 .thenThrow(new DataAccessResourceFailureException("db down at 10.0.0.1:5432"));
 
@@ -103,7 +107,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void 想定外例外は500で汎用文言() throws Exception {
         // search が想定外の実行時例外を投げるようモックする
-        when(expenseService.search(any(), any()))
+        when(expenseService.search(any(), any(), any()))
                 // 内部メッセージを含む例外を投げる
                 .thenThrow(new RuntimeException("boom internal detail"));
 
@@ -135,7 +139,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void 想定外のIllegalArgumentは400で汎用文言() throws Exception {
         // search が内部詳細を含む IllegalArgumentException を投げるようモックする
-        when(expenseService.search(any(), any()))
+        when(expenseService.search(any(), any(), any()))
                 // 内部詳細を含む例外を投げる（外部に漏れてはいけない）
                 .thenThrow(new IllegalArgumentException("internal detail: ownerId=42"));
 

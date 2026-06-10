@@ -45,6 +45,21 @@ Docker を使わず手元で直接動かしたい場合は、別途 **Java 21** 
 
 ## 使ってみる（最短ルート）
 
+### 0. 環境変数を用意する
+
+このアプリは **DB パスワード** を環境変数で受け取ります（未設定だと安全側に倒して起動しません）。
+同梱の `.env.example` をコピーして `.env` を作り、値を設定してください（`.env` はコミットしないこと）。
+
+```bash
+cp .env.example .env
+# .env を開き、SPRING_DATASOURCE_PASSWORD に好きな値を設定する
+```
+
+| 変数 | 必須 | 説明 |
+|------|------|------|
+| `SPRING_DATASOURCE_PASSWORD` | 必須 | データベースのパスワード |
+| `SPRING_DATASOURCE_USERNAME` | 任意 | DB ユーザー名（未設定なら `expensetracker`） |
+
 ### 1. 起動する
 
 プロジェクトのフォルダ（この README がある場所）で、次のコマンドを1つ実行するだけです。
@@ -130,18 +145,27 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 | Method | パス | 何をする |
 |--------|------|----------|
 | POST   | `/api/categories` | カテゴリを作る |
-| GET    | `/api/categories` | カテゴリの一覧を見る |
+| GET    | `/api/categories` | カテゴリの一覧を見る（ページ単位。下記参照） |
 
 ### 支出
 
 | Method | パス | 何をする |
 |--------|------|----------|
 | POST   | `/api/expenses` | 支出を登録する |
-| GET    | `/api/expenses` | 支出の一覧を見る（絞り込み可。下記参照） |
+| GET    | `/api/expenses` | 支出の一覧を見る（絞り込み・ページ単位。下記参照） |
 | GET    | `/api/expenses/{id}` | 1件の支出の詳細を見る |
 | PUT    | `/api/expenses/{id}` | 支出の内容を書き換える |
 | DELETE | `/api/expenses/{id}` | 支出を削除する |
 | GET    | `/api/expenses/summary?month=YYYY-MM` | 月ごとの集計を見る |
+
+#### 一覧のページ指定（ページネーション）
+
+一覧（`GET /api/expenses`・`GET /api/categories`）は、一度に返す件数を制限してページ単位で返します。
+
+- `page=0` … 何ページ目か（0 始まり・省略時は 0）
+- `size=20` … 1 ページの件数（省略時は 20・最大 100）
+
+返り値は `content`（要素の配列）に加え、`page` / `size` / `totalElements`（全件数）/ `totalPages`（全ページ数）を含みます。
 
 #### 支出一覧の絞り込み
 
@@ -151,8 +175,8 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 - `categoryId=1` … 指定したカテゴリの支出だけに絞る
 
 ```bash
-# 2026年6月の食費（カテゴリID=1）だけを見る
-curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
+# 2026年6月の食費（カテゴリID=1）だけを、1ページ10件で見る
+curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
 ```
 
 ---
@@ -163,9 +187,9 @@ curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
 
 | 項目 | ルール |
 |------|--------|
-| `amount`（金額） | 必須。**0 より大きい** 数字 |
+| `amount`（金額） | 必須。**0 より大きい** 数字。整数部 17 桁・小数部 2 桁まで（DB の精度に合わせる） |
 | `categoryId` | 必須。**実在するカテゴリの番号** であること |
-| `spentOn`（支出日） | 必須。`YYYY-MM-DD` 形式。**未来の日付は不可** |
+| `spentOn`（支出日） | 必須。`YYYY-MM-DD` 形式。**未来の日付は不可**（判定は日本時間 JST 基準） |
 | `description`（メモ） | 任意。255 文字まで |
 | カテゴリの `name` | 必須。50 文字まで。**同じ名前は登録不可**（重複禁止） |
 
@@ -188,27 +212,42 @@ curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
 | 400 | 入力がルール違反 | 金額が 0 以下、日付の形式ミス など |
 | 404 | 対象が見つからない | 存在しないカテゴリ番号や支出番号を指定した |
 | 409 | 重複している | すでにある名前のカテゴリを作ろうとした |
+| 429 | アクセスが多すぎる | 短時間に大量のリクエストを送った（レート制限） |
+
+---
+
+## 既知の制約・今後の課題
+
+本リポジトリは MVP（最小構成）です。以下は**意図的に未実装**で、今後の課題として整理しています。
+
+- **認証・認可**: 現状は単一利用者向けで、エンドポイントに認証はありません。公開・マルチユーザ化の際は、API キーや JWT などの認証と所有者単位のデータ分離を別途導入する必要があります。
+- **カテゴリの更新・削除 API**: 現状はカテゴリの作成・一覧のみです。更新・削除を追加する場合は、支出が紐づくカテゴリの扱い（削除禁止 or カスケード）の仕様を定義したうえで実装します。
 
 ---
 
 ## Docker を使わずに動かす
 
 手元に **Java 21** と **PostgreSQL 16** を用意できる場合は、直接起動できます。
+**起動前に `SPRING_DATASOURCE_PASSWORD` を必ず設定**してください（未設定だと安全側に倒して起動しません）。
 
 ```bash
+# 必須の環境変数を設定してから起動する
+export SPRING_DATASOURCE_PASSWORD=お好きなパスワード
 # Maven のラッパー（同梱）で起動
 ./mvnw spring-boot:run
 ```
 
-データベースの接続先は、次の環境変数で上書きできます（指定しなければ `application.yml` の初期値を使います）。
+データベースの接続先などは、次の環境変数で上書きできます。
 
-| 環境変数 | 意味 |
-|----------|------|
-| `SPRING_DATASOURCE_URL` | 接続先（例：`jdbc:postgresql://localhost:5432/expensetracker`） |
-| `SPRING_DATASOURCE_USERNAME` | ユーザー名 |
-| `SPRING_DATASOURCE_PASSWORD` | パスワード |
+| 環境変数 | 必須 | 意味 |
+|----------|------|------|
+| `SPRING_DATASOURCE_PASSWORD` | 必須 | パスワード（未設定なら起動しない） |
+| `SPRING_DATASOURCE_URL` | 任意 | 接続先（例：`jdbc:postgresql://localhost:5432/expensetracker`） |
+| `SPRING_DATASOURCE_USERNAME` | 任意 | ユーザー名（未設定なら `expensetracker`） |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | 任意 | スキーマ反映方針。本番は `validate` 推奨（既定は開発用の `update`） |
+| `SPRING_JPA_SHOW_SQL` | 任意 | SQL ログ出力（既定 `false`。デバッグ時のみ `true`） |
 
-> 設定ファイルや docker-compose に書かれているユーザー名・パスワードは **ローカルでお試しするための初期値** です。本番では必ず変更してください。
+> パスワードは秘密情報です。コードや docker-compose に直接書かず、環境変数や `.env` で渡してください（`.env` はコミットしない）。本番では推測されにくい値を設定してください。
 
 ---
 
@@ -300,6 +339,21 @@ If you prefer to run it directly without Docker, you'll separately need **Java 2
 
 ## Try it out (shortest path)
 
+### 0. Set up environment variables
+
+This app reads the **DB password** from an environment variable (it fails to start if it is missing, by design).
+Copy the bundled `.env.example` to `.env` and fill in the value (never commit `.env`).
+
+```bash
+cp .env.example .env
+# Open .env and set SPRING_DATASOURCE_PASSWORD to a value of your choice
+```
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SPRING_DATASOURCE_PASSWORD` | Yes | Database password |
+| `SPRING_DATASOURCE_USERNAME` | No | DB user name (defaults to `expensetracker`) |
+
 ### 1. Start it
 
 In the project folder (where this README lives), just run this one command.
@@ -385,18 +439,27 @@ Replace `{id}` with an actual number (e.g. `1`).
 | Method | Path | What it does |
 |--------|------|--------------|
 | POST   | `/api/categories` | Create a category |
-| GET    | `/api/categories` | List categories |
+| GET    | `/api/categories` | List categories (paginated; see below) |
 
 ### Expenses
 
 | Method | Path | What it does |
 |--------|------|--------------|
 | POST   | `/api/expenses` | Register an expense |
-| GET    | `/api/expenses` | List expenses (filterable; see below) |
+| GET    | `/api/expenses` | List expenses (filterable & paginated; see below) |
 | GET    | `/api/expenses/{id}` | View one expense in detail |
 | PUT    | `/api/expenses/{id}` | Update an expense |
 | DELETE | `/api/expenses/{id}` | Delete an expense |
 | GET    | `/api/expenses/summary?month=YYYY-MM` | View the monthly summary |
+
+#### Pagination
+
+The list endpoints (`GET /api/expenses`, `GET /api/categories`) cap how many items they return and respond page by page.
+
+- `page=0` … which page (0-based; defaults to 0)
+- `size=20` … items per page (defaults to 20; max 100)
+
+Besides `content` (the array of items), the response includes `page` / `size` / `totalElements` / `totalPages`.
 
 #### Filtering the expense list
 
@@ -406,8 +469,8 @@ Replace `{id}` with an actual number (e.g. `1`).
 - `categoryId=1` … only expenses in the given category
 
 ```bash
-# Only Food (category ID = 1) expenses in June 2026
-curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1"
+# Only Food (category ID = 1) expenses in June 2026, 10 per page
+curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
 ```
 
 ---
@@ -418,9 +481,9 @@ To prevent bad data, the following checks run on create/update. Violations retur
 
 | Field | Rule |
 |-------|------|
-| `amount` | Required. A number **greater than 0** |
+| `amount` | Required. A number **greater than 0**, up to 17 integer digits and 2 fraction digits (matches DB precision) |
 | `categoryId` | Required. Must be the number of an **existing category** |
-| `spentOn` (date) | Required. `YYYY-MM-DD` format. **Future dates not allowed** |
+| `spentOn` (date) | Required. `YYYY-MM-DD` format. **Future dates not allowed** (judged in JST) |
 | `description` (memo) | Optional. Up to 255 characters |
 | category `name` | Required. Up to 50 characters. **No duplicate names** allowed |
 
@@ -443,27 +506,42 @@ What the `status` number means:
 | 400 | Input breaks a rule | Amount ≤ 0, malformed date, etc. |
 | 404 | Target not found | A category/expense number that doesn't exist |
 | 409 | Conflict (duplicate) | Trying to create a category whose name already exists |
+| 429 | Too many requests | Too many requests in a short time (rate limit) |
+
+---
+
+## Known limitations / future work
+
+This repository is an MVP. The following are **intentionally not implemented** and tracked as future work.
+
+- **Authentication / authorization**: The API is currently single-user and has no auth on its endpoints. Before going public or multi-user, add authentication (API key, JWT, etc.) and per-owner data isolation.
+- **Category update / delete API**: Only create and list are provided for categories. Adding update/delete requires first defining how categories that have expenses are handled (block deletion vs. cascade).
 
 ---
 
 ## Running without Docker
 
 If you can provide **Java 21** and **PostgreSQL 16** locally, you can start it directly.
+**Before starting, you must set `SPRING_DATASOURCE_PASSWORD`** (it fails to start if it is missing, by design).
 
 ```bash
+# Set the required environment variable, then start
+export SPRING_DATASOURCE_PASSWORD=a-password-of-your-choice
 # Start via the bundled Maven wrapper
 ./mvnw spring-boot:run
 ```
 
-The database connection can be overridden with these environment variables (if unset, the defaults in `application.yml` are used).
+The connection and other settings can be overridden with these environment variables.
 
-| Environment variable | Meaning |
-|----------------------|---------|
-| `SPRING_DATASOURCE_URL` | Connection target (e.g. `jdbc:postgresql://localhost:5432/expensetracker`) |
-| `SPRING_DATASOURCE_USERNAME` | Username |
-| `SPRING_DATASOURCE_PASSWORD` | Password |
+| Environment variable | Required | Meaning |
+|----------------------|----------|---------|
+| `SPRING_DATASOURCE_PASSWORD` | Yes | Password (app won't start if unset) |
+| `SPRING_DATASOURCE_URL` | No | Connection target (e.g. `jdbc:postgresql://localhost:5432/expensetracker`) |
+| `SPRING_DATASOURCE_USERNAME` | No | Username (defaults to `expensetracker`) |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | No | Schema strategy. Use `validate` in production (defaults to `update` for dev) |
+| `SPRING_JPA_SHOW_SQL` | No | SQL logging (defaults to `false`; set `true` only for debugging) |
 
-> The usernames/passwords written in the config file and docker-compose are **defaults for local trials**. Always change them in production.
+> The password is a secret. Don't hard-code it in source or docker-compose; pass it via an environment variable or `.env` (never commit `.env`). Use a hard-to-guess value in production.
 
 ---
 

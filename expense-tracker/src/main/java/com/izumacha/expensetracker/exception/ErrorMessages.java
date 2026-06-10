@@ -35,4 +35,7 @@ public final class ErrorMessages {
 
     // 想定外のサーバ内部エラー時に返す汎用文言（内部詳細・スタックトレースは含めない）
     public static final String INTERNAL_ERROR = "サーバー内部でエラーが発生しました";
+
+    // レート制限を超過したときの安全な文言（しきい値の詳細は含めない）
+    public static final String TOO_MANY_REQUESTS = "リクエストが多すぎます。しばらく待って再試行してください";
 }

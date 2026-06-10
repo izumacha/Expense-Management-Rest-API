@@ -10,22 +10,22 @@ services:
     environment:
       # 作成するデータベース名
       POSTGRES_DB: expensetracker
-      # 作成するユーザー名
-      POSTGRES_USER: expensetracker
-      # 設定するパスワード
-      POSTGRES_PASSWORD: expensetracker
+      # 作成するユーザー名（未設定なら expensetracker を使う）
+      POSTGRES_USER: ${SPRING_DATASOURCE_USERNAME:-expensetracker}
+      # 設定するパスワード（秘密情報のため .env から与える。未設定なら起動を失敗させる＝fail-closed）
+      POSTGRES_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:?SPRING_DATASOURCE_PASSWORD を .env で設定してください}
     # データを永続化するボリュームマウント
     volumes:
       # 名前付きボリュームを PostgreSQL のデータ領域に割り当てる
       - db-data:/var/lib/postgresql/data
-    # ホストへポートを公開する（任意・確認用）
+    # ホストへポートを公開する（ローカル確認用にループバックのみへ限定し、外部公開しない）
     ports:
-      # ホスト 5432 をコンテナ 5432 に割り当てる
-      - "5432:5432"
+      # ホストの 127.0.0.1:5432 をコンテナ 5432 に割り当てる（外部からは到達不可）
+      - "127.0.0.1:5432:5432"
     # 起動完了を判定するヘルスチェック
     healthcheck:
-      # DB の応答可否を確認するコマンド
-      test: ["CMD-SHELL", "pg_isready -U expensetracker -d expensetracker"]
+      # DB の応答可否を確認するコマンド（ユーザー名は環境変数から与える）
+      test: ["CMD-SHELL", "pg_isready -U ${SPRING_DATASOURCE_USERNAME:-expensetracker} -d expensetracker"]
       # チェック間隔
       interval: 5s
       # タイムアウト時間
@@ -45,14 +45,14 @@ services:
       db:
         # ヘルスチェック成功を待つ
         condition: service_healthy
-    # アプリへ渡す環境変数（DB 接続情報）
+    # アプリへ渡す環境変数（DB 接続情報・API キー）
     environment:
       # JDBC 接続 URL（サービス名 db で名前解決）
       SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/expensetracker
-      # 接続ユーザー名
-      SPRING_DATASOURCE_USERNAME: expensetracker
-      # 接続パスワード
-      SPRING_DATASOURCE_PASSWORD: expensetracker
+      # 接続ユーザー名（未設定なら expensetracker を使う）
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-expensetracker}
+      # 接続パスワード（.env から与える。未設定なら起動を失敗させる＝fail-closed）
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:?SPRING_DATASOURCE_PASSWORD を .env で設定してください}
     # ホストへ待受ポートを公開する
     ports:
       # ホスト 8080 をコンテナ 8080 に割り当てる

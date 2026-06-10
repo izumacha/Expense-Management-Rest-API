@@ -5,10 +5,16 @@ package com.izumacha.expensetracker.controller;
 import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
+// ページ形式の返却 DTO を参照する
+import com.izumacha.expensetracker.dto.response.PageResponse;
 // カテゴリサービスを参照する
 import com.izumacha.expensetracker.service.CategoryService;
 // リクエストボディの検証を有効化するアノテーション
 import jakarta.validation.Valid;
+// ページ指定（ページ番号・件数）を表す型
+import org.springframework.data.domain.Pageable;
+// 一覧取得時の既定ページサイズを指定するアノテーション
+import org.springframework.data.web.PageableDefault;
 // HTTP ステータスを表す列挙
 import org.springframework.http.HttpStatus;
 // HTTP レスポンス全体を表すクラス
@@ -23,8 +29,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 // REST コントローラ宣言用アノテーション
 import org.springframework.web.bind.annotation.RestController;
-// 一覧の戻り型
-import java.util.List;
 
 // カテゴリ関連のエンドポイントを提供するコントローラ
 @RestController
@@ -50,10 +54,12 @@ public class CategoryController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    // カテゴリ一覧を取得する（成功時 200）
+    // カテゴリ一覧をページ単位で取得する（成功時 200）
     @GetMapping
-    public List<CategoryResponse> list() {
-        // サービスで全カテゴリを取得して返す
-        return categoryService.findAll();
+    public PageResponse<CategoryResponse> list(
+            // ページ指定（page / size。size 未指定時は既定 20。上限は application.yml で制限）
+            @PageableDefault(size = 20) Pageable pageable) {
+        // サービスでカテゴリをページ単位で取得して返す
+        return categoryService.findAll(pageable);
     }
 }

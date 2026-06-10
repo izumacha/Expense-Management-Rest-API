@@ -7,6 +7,8 @@ import com.izumacha.expensetracker.domain.Category;
 import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
+// ページ形式の返却 DTO を参照する
+import com.izumacha.expensetracker.dto.response.PageResponse;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
 // 外部向けエラーメッセージ定数を参照する
@@ -15,10 +17,10 @@ import com.izumacha.expensetracker.exception.ErrorMessages;
 import com.izumacha.expensetracker.repository.CategoryRepository;
 // 一意制約違反を検出する例外
 import org.springframework.dao.DataIntegrityViolationException;
-// 一覧の戻り型
-import java.util.List;
-// DTO への変換に使う Stream 収集
-import java.util.stream.Collectors;
+// ページ単位の取得結果を表す型
+import org.springframework.data.domain.Page;
+// ページ指定（ページ番号・件数）を表す型
+import org.springframework.data.domain.Pageable;
 // Spring のサービスコンポーネント宣言
 import org.springframework.stereotype.Service;
 // トランザクション境界の宣言
@@ -59,14 +61,14 @@ public class CategoryService {
         }
     }
 
-    // カテゴリ一覧を取得する
+    // カテゴリ一覧をページ単位で取得する
     @Transactional(readOnly = true)
-    public List<CategoryResponse> findAll() {
-        // 全カテゴリを取得して DTO のリストに変換する
-        return categoryRepository.findAll().stream()
+    public PageResponse<CategoryResponse> findAll(Pageable pageable) {
+        // 全カテゴリをページ単位で取得して DTO へ変換する（ページ情報は維持する）
+        Page<CategoryResponse> page = categoryRepository.findAll(pageable)
                 // 各エンティティを DTO へ変換する
-                .map(CategoryResponse::from)
-                // リストにまとめる
-                .collect(Collectors.toList());
+                .map(CategoryResponse::from);
+        // ページ情報を安定した契約の DTO へ詰め替えて返す
+        return PageResponse.from(page);
     }
 }

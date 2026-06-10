@@ -7,6 +7,8 @@ import com.izumacha.expensetracker.domain.Category;
 import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
+// ページ形式の返却 DTO を参照する
+import com.izumacha.expensetracker.dto.response.PageResponse;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
 // カテゴリリポジトリを参照する
@@ -21,6 +23,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 // 一意制約違反を表す例外
 import org.springframework.dao.DataIntegrityViolationException;
+// ページ実体を組み立てる型
+import org.springframework.data.domain.PageImpl;
+// ページ指定（ページ番号・件数）を表す型
+import org.springframework.data.domain.Pageable;
 // モック対象を宣言するアノテーション
 import org.mockito.InjectMocks;
 // モックを生成するアノテーション
@@ -116,22 +122,22 @@ class CategoryServiceTest {
                 .isInstanceOf(DuplicateException.class);
     }
 
-    // findAll: 全カテゴリが DTO のリストに変換されることを検証する
+    // findAll: 全カテゴリが DTO のページに変換されることを検証する
     @Test
     void findAll_全件をDTOへ変換して返す() {
-        // 2 件のカテゴリを返すようモックする
-        when(categoryRepository.findAll())
-                // 食費と交通費を返す
-                .thenReturn(List.of(category(1L, "食費"), category(2L, "交通費")));
+        // 2 件のカテゴリを 1 ページとして返すようモックする
+        when(categoryRepository.findAll(any(Pageable.class)))
+                // 食費と交通費を含むページを返す
+                .thenReturn(new PageImpl<>(List.of(category(1L, "食費"), category(2L, "交通費"))));
 
-        // テスト対象の findAll を呼び出す
-        List<CategoryResponse> result = categoryService.findAll();
+        // テスト対象の findAll を呼び出す（既定ページ指定）
+        PageResponse<CategoryResponse> result = categoryService.findAll(Pageable.unpaged());
 
         // 件数が 2 件であることを検証する
-        assertThat(result).hasSize(2);
+        assertThat(result.content()).hasSize(2);
         // 1 件目の名前が食費であることを検証する
-        assertThat(result.get(0).name()).isEqualTo("食費");
+        assertThat(result.content().get(0).name()).isEqualTo("食費");
         // 2 件目の名前が交通費であることを検証する
-        assertThat(result.get(1).name()).isEqualTo("交通費");
+        assertThat(result.content().get(1).name()).isEqualTo("交通費");
     }
 }
