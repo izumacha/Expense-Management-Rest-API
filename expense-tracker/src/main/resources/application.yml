@@ -2,32 +2,78 @@
 spring:
   # データソース（DB 接続）の設定
   datasource:
-    # 接続先 URL（環境変数があれば優先、無ければローカルの既定値）
+    # 接続先 URL（環境変数があれば優先、無ければローカル開発用の既定値）
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/expensetracker}
-    # 接続ユーザー名
+    # 接続ユーザー名（秘密情報ではないためローカル開発用の既定値を許可する）
     username: ${SPRING_DATASOURCE_USERNAME:expensetracker}
-    # 接続パスワード
-    password: ${SPRING_DATASOURCE_PASSWORD:expensetracker}
+    # 接続パスワード（秘密情報のため既定値を持たせず、未設定なら起動を失敗させる＝fail-closed）
+    password: ${SPRING_DATASOURCE_PASSWORD:?データベースのパスワードを環境変数 SPRING_DATASOURCE_PASSWORD で必ず設定してください}
     # 使用する JDBC ドライバ
     driver-class-name: org.postgresql.Driver
   # JPA / Hibernate の設定
   jpa:
-    # スキーマ自動更新（Flyway はスコープ外）
+    # スキーマ管理（Flyway はスコープ外）
     hibernate:
-      # エンティティに合わせてテーブルを更新する
-      ddl-auto: update
+      # スキーマ反映方針（既定はローカル開発用の update。本番は環境変数で validate を指定し自動変更を禁止する）
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
     # Open Session In View を無効化する
     open-in-view: false
     # SQL の各種挙動
     properties:
       # Hibernate 固有のプロパティ
       hibernate:
-        # 実行 SQL を整形して表示する
-        format_sql: true
-    # 実行された SQL をログ出力する
-    show-sql: true
+        # 実行 SQL を整形して表示する（既定は無効。デバッグ時のみ環境変数で有効化する）
+        format_sql: ${SPRING_JPA_SHOW_SQL:false}
+    # 実行された SQL をログ出力する（既定は無効。本番でのSQL露出を防ぐため fail-safe に false とする）
+    show-sql: ${SPRING_JPA_SHOW_SQL:false}
+  # Spring Data Web（ページネーション）の設定
+  data:
+    # Web 連携の設定
+    web:
+      # Pageable（ページ指定）の既定値・上限を一元管理する（§6 / §8 一覧の上限）
+      pageable:
+        # ページ番号・サイズのクエリパラメータ名（page / size）はデフォルトのまま使う
+        # 1 ページあたりの既定件数（size 未指定時）
+        default-page-size: 20
+        # 1 ページあたりの最大件数（これを超える size 指定は上限へ丸める。無制限取得による DoS を防ぐ）
+        max-page-size: 100
+  # JSON シリアライズ（Jackson）の設定
+  jackson:
+    # 日時の出力タイムゾーンを日本時間に固定し、サーバ稼働環境の TZ 差異をなくす
+    time-zone: Asia/Tokyo
+  # マルチパート（ファイルアップロード）の上限（巨大ボディによるリソース枯渇を防ぐ）
+  servlet:
+    # マルチパート関連の設定
+    multipart:
+      # 1 ファイルあたりの最大サイズ
+      max-file-size: 1MB
+      # リクエスト全体の最大サイズ
+      max-request-size: 1MB
 
 # サーバの設定
 server:
   # 待ち受けポート（8080 で待受）
   port: 8080
+  # リクエストヘッダの最大サイズ（巨大ヘッダによる攻撃を防ぐ）
+  max-http-request-header-size: 16KB
+  # 組込 Tomcat の設定
+  tomcat:
+    # 接続確立後にリクエストが届くまでの待ち時間（スロー攻撃対策のタイムアウト）
+    connection-timeout: 5s
+    # 読み捨てる最大バイト数（巨大ボディの受信を打ち切ってリソース枯渇を防ぐ）
+    max-swallow-size: 2MB
+    # フォーム POST の最大サイズ（巨大ボディによるリソース枯渇を防ぐ）
+    max-http-form-post-size: 1MB
+
+# アプリ固有の設定（自作の機能で参照する）
+app:
+  # API のアクセス制御に関する設定
+  security:
+    # 受け付ける API キー（秘密情報のため既定値を持たず、未設定なら起動を失敗させる＝fail-closed）
+    api-key: ${APP_API_KEY:?API キーを環境変数 APP_API_KEY で必ず設定してください}
+  # レート制限（短時間の大量アクセスを抑制して DoS を防ぐ）に関する設定
+  rate-limit:
+    # 1 つの送信元 IP が単位時間内に許可されるリクエスト数の上限
+    capacity: ${APP_RATE_LIMIT_CAPACITY:120}
+    # 上限をカウントする単位時間（秒）
+    window-seconds: ${APP_RATE_LIMIT_WINDOW_SECONDS:60}

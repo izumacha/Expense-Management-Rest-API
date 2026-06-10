@@ -3,6 +3,8 @@ package com.izumacha.expensetracker.dto.request;
 
 // 0より大きいことを検証するバリデーション
 import jakarta.validation.constraints.DecimalMin;
+// 整数部・小数部の桁数を制限するバリデーション
+import jakarta.validation.constraints.Digits;
 // null を禁止するバリデーション
 import jakarta.validation.constraints.NotNull;
 // 過去または当日であることを検証するバリデーション
@@ -17,10 +19,12 @@ import java.time.LocalDate;
 // 支出作成・更新リクエストを表す record
 public record CreateExpenseRequest(
 
-        // 金額（必須・0より大きい）
+        // 金額（必須・0より大きい・桁数は DB 列 precision=19/scale=2 に合わせる）
         @NotNull(message = "must not be null")
         // 0 を含まず 0 より大きい値のみ許可する
         @DecimalMin(value = "0", inclusive = false, message = "must be greater than 0")
+        // 整数部 17 桁・小数部 2 桁までに制限する（DB 列精度との不整合や巨大値を防ぐ）
+        @Digits(integer = 17, fraction = 2, message = "must have at most 17 integer digits and 2 fraction digits")
         BigDecimal amount,
 
         // カテゴリ ID（必須・存在しなければサービス層で404）
