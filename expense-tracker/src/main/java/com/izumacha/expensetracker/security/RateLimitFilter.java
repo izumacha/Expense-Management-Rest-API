@@ -3,6 +3,10 @@ package com.izumacha.expensetracker.security;
 
 // JSON 応答を書き出すための Jackson の中心クラス
 import com.fasterxml.jackson.databind.ObjectMapper;
+// ログ出力に使うロガー本体
+import org.slf4j.Logger;
+// ロガーを生成するファクトリ
+import org.slf4j.LoggerFactory;
 // 外部向けエラーメッセージ定数を参照する
 import com.izumacha.expensetracker.exception.ErrorMessages;
 // {status, message} 形式のエラー応答を書き出す共通ユーティリティ
@@ -21,6 +25,8 @@ import java.io.IOException;
 import java.util.concurrent.ConcurrentHashMap;
 // 単位時間内のカウントをスレッドセーフに数えるための整数
 import java.util.concurrent.atomic.AtomicInteger;
+// 最後に警告ログを出したウィンドウ番号をスレッドセーフに保持するための長整数
+import java.util.concurrent.atomic.AtomicLong;
 // プロパティ値を注入するアノテーション
 import org.springframework.beans.factory.annotation.Value;
 // Bean の優先順位（フィルタの適用順）を指定するアノテーション
@@ -39,6 +45,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Order(1)
 public class RateLimitFilter extends OncePerRequestFilter {
 
+    // このクラスのログ出力に使うロガー
+    private static final Logger log = LoggerFactory.getLogger(RateLimitFilter.class);
+
     // 追跡する送信元 IP の最大数（無制限に増やしてメモリを枯渇させないための上限）
     private static final int MAX_TRACKED_CLIENTS = 10_000;
 
@@ -56,6 +65,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     // 送信元 IP ごとの「現在ウィンドウとそのカウント」を保持するマップ
     private final ConcurrentHashMap<String, Window> counters = new ConcurrentHashMap<>();
+
+    // 最後に上限到達の警告ログを出したウィンドウ番号（同一ウィンドウ内での警告ログ連発＝ログ起因の DoS を防ぐ）。
+    // 初期値 -1 は「まだ一度も警告を出していない」ことを表す。
+    private final AtomicLong lastWarnedWindow = new AtomicLong(-1);
 
     // 設定値と ObjectMapper をコンストラクタで受け取る
     public RateLimitFilter(
@@ -129,6 +142,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // 掃除後もまだ上限に達しているか（同一ウィンドウに大量の送信元がいる状況）を判定する
         // （compute の中ではマップを変更できないため、ここで一度だけ判定して使い回す）
         boolean atCapacity = counters.size() >= MAX_TRACKED_CLIENTS;
+        // 上限に達している場合は警告ログを出力する（管理者が容量設定を見直せるように）
+        // ただし isOverLimit はリクエストごとに呼ばれるため、毎回ログを出すと上限到達時（＝大量アクセス時）に
+        // 警告が秒間大量に出てログ起因の二次的な資源枯渇を招く。そこで現在ウィンドウで未出力のときだけ出す（1 ウィンドウ 1 回に抑制）。
+        if (atCapacity) {
+            // 直近に警告したウィンドウ番号を読み出す（他スレッドが同時に更新する可能性がある）
+            long previouslyWarned = lastWarnedWindow.get();
+            // まだこのウィンドウで警告していない、かつ自分が代表として番号を更新できた場合だけログを出す（compareAndSet で重複出力を防ぐ）
+            if (previouslyWarned != currentWindow && lastWarnedWindow.compareAndSet(previouslyWarned, currentWindow)) {
+                log.warn("追跡クライアント数が上限({})に達しました。古いエントリの削除を検討してください。", MAX_TRACKED_CLIENTS); // 上限到達時に警告ログを出力（同一ウィンドウ内では 1 回だけ）
+            }
+        }
         // 送信元の現在ウィンドウのカウンタを取得する（無ければ新規ウィンドウで作成）
         Window window = counters.compute(clientKey, (key, existing) -> {
             // 同じウィンドウの既存カウンタがあればそれを引き続き使う
