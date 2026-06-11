@@ -46,6 +46,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final int capacity;
     // カウントの単位時間（秒）
     private final long windowSeconds;
+    // X-Forwarded-For ヘッダを信頼するかどうか（リバースプロキシ配下のときのみ true にする）
+    // デフォルト false: 直接接続を前提とし、ユーザーが偽装できる X-Forwarded-For を無視する。
+    // リバースプロキシ配下に置く場合は app.rate-limit.trust-x-forwarded-for=true を設定し、
+    // プロキシ以外からは X-Forwarded-For を書き換えられないようネットワーク側で保護すること。
+    private final boolean trustXForwardedFor;
     // エラー応答を JSON で書き出すための ObjectMapper
     private final ObjectMapper objectMapper;
 
@@ -58,12 +63,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
             @Value("${app.rate-limit.capacity}") int capacity,
             // 単位時間の長さ（app.rate-limit.window-seconds）
             @Value("${app.rate-limit.window-seconds}") long windowSeconds,
+            // X-Forwarded-For を信頼するか（リバースプロキシ配下かどうか）。既定は false（安全側）
+            @Value("${app.rate-limit.trust-x-forwarded-for:false}") boolean trustXForwardedFor,
             // JSON 直列化に使う ObjectMapper
             ObjectMapper objectMapper) {
         // 許可数をフィールドに保持する
         this.capacity = capacity;
         // 単位時間をフィールドに保持する
         this.windowSeconds = windowSeconds;
+        // X-Forwarded-For の信頼設定をフィールドに保持する
+        this.trustXForwardedFor = trustXForwardedFor;
         // ObjectMapper をフィールドに保持する
         this.objectMapper = objectMapper;
     }
@@ -72,8 +81,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        // 送信元を識別するキー（接続元 IP アドレス）を取得する
-        String clientKey = request.getRemoteAddr();
+        // 送信元を識別するキーを取得する（trust-x-forwarded-for 設定により直接 IP か X-Forwarded-For かを切り替える）
+        String clientKey = resolveClientKey(request);
         // 上限超過なら 429 を返して処理を打ち切る
         if (isOverLimit(clientKey)) {
             // 再試行までの目安秒数をヘッダで伝える
@@ -85,6 +94,27 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
         // 上限内なので後続の処理へ進める
         filterChain.doFilter(request, response);
+    }
+
+    // 送信元を識別するキーを解決する。
+    // trust-x-forwarded-for が true（かつリバースプロキシ配下）の場合のみ X-Forwarded-For を参照する。
+    // false（デフォルト）の場合は getRemoteAddr() だけを使う。
+    // X-Forwarded-For はユーザーが任意の値を送れるヘッダであるため、
+    // 信頼できるリバースプロキシが設定・書き換える保証がなければ使ってはいけない。
+    private String resolveClientKey(HttpServletRequest request) {
+        // trust-x-forwarded-for が有効でない場合はヘッダを無視して接続元 IP をそのまま使う
+        if (!trustXForwardedFor) {
+            return request.getRemoteAddr(); // 直接接続元 IP（スプーフィング不可）
+        }
+        // X-Forwarded-For ヘッダ値を取得する（リバースプロキシが付与する転送元 IP）
+        String forwarded = request.getHeader("X-Forwarded-For");
+        // ヘッダが存在し空でない場合はカンマ区切りの先頭値（最初の送信元 IP）を使う
+        if (forwarded != null && !forwarded.isBlank()) {
+            // カンマ区切りで複数の IP が連なる場合は先頭だけ取り出してトリムする
+            return forwarded.split(",", 2)[0].strip();
+        }
+        // ヘッダが無い場合（直接接続）は接続元 IP をそのまま使う
+        return request.getRemoteAddr();
     }
 
     // 送信元のカウントを 1 増やし、単位時間内の上限を超えたかを返す

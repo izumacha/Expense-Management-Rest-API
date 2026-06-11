@@ -73,3 +73,7 @@ app:
     capacity: ${APP_RATE_LIMIT_CAPACITY:120}
     # 上限をカウントする単位時間（秒）
     window-seconds: ${APP_RATE_LIMIT_WINDOW_SECONDS:60}
+    # X-Forwarded-For ヘッダを信頼するか（リバースプロキシ配下で true にする）。
+    # デフォルト false: このヘッダはユーザーが偽装できるため、信頼できるプロキシがヘッダを制御できる
+    # 環境でのみ true に変更すること。プロキシなしで true にするとレート制限が回避できてしまう。
+    trust-x-forwarded-for: ${APP_RATE_LIMIT_TRUST_XFF:false}
