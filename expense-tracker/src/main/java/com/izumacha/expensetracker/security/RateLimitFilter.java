@@ -3,6 +3,10 @@ package com.izumacha.expensetracker.security;
 
 // JSON 応答を書き出すための Jackson の中心クラス
 import com.fasterxml.jackson.databind.ObjectMapper;
+// ログ出力に使うロガー本体
+import org.slf4j.Logger;
+// ロガーを生成するファクトリ
+import org.slf4j.LoggerFactory;
 // 外部向けエラーメッセージ定数を参照する
 import com.izumacha.expensetracker.exception.ErrorMessages;
 // {status, message} 形式のエラー応答を書き出す共通ユーティリティ
@@ -38,6 +42,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 // 認証より手前で先に流量を絞る（無認証の大量アクセスでも認証処理に到達させない）
 @Order(1)
 public class RateLimitFilter extends OncePerRequestFilter {
+
+    // このクラスのログ出力に使うロガー
+    private static final Logger log = LoggerFactory.getLogger(RateLimitFilter.class);
 
     // 追跡する送信元 IP の最大数（無制限に増やしてメモリを枯渇させないための上限）
     private static final int MAX_TRACKED_CLIENTS = 10_000;
@@ -129,6 +136,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // 掃除後もまだ上限に達しているか（同一ウィンドウに大量の送信元がいる状況）を判定する
         // （compute の中ではマップを変更できないため、ここで一度だけ判定して使い回す）
         boolean atCapacity = counters.size() >= MAX_TRACKED_CLIENTS;
+        // 上限に達している場合は警告ログを出力する（管理者が容量設定を見直せるように）
+        if (atCapacity) {
+            log.warn("追跡クライアント数が上限({})に達しました。古いエントリの削除を検討してください。", MAX_TRACKED_CLIENTS); // 上限到達時に警告ログを出力
+        }
         // 送信元の現在ウィンドウのカウンタを取得する（無ければ新規ウィンドウで作成）
         Window window = counters.compute(clientKey, (key, existing) -> {
             // 同じウィンドウの既存カウンタがあればそれを引き続き使う
