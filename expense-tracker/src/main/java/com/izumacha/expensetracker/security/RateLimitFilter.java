@@ -72,8 +72,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        // 送信元を識別するキー（接続元 IP アドレス）を取得する
-        String clientKey = request.getRemoteAddr();
+        // 送信元を識別するキーを取得する（リバースプロキシ配下では X-Forwarded-For の先頭値を優先する）
+        String clientKey = resolveClientKey(request);
         // 上限超過なら 429 を返して処理を打ち切る
         if (isOverLimit(clientKey)) {
             // 再試行までの目安秒数をヘッダで伝える
@@ -85,6 +85,22 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
         // 上限内なので後続の処理へ進める
         filterChain.doFilter(request, response);
+    }
+
+    // 送信元を識別するキーを解決する。
+    // リバースプロキシ配下では接続元 IP がプロキシの IP になるため、
+    // X-Forwarded-For ヘッダが存在する場合はその先頭値（元のクライアント IP）を優先する。
+    // ヘッダが存在しない直接接続の場合は getRemoteAddr() を使う。
+    private String resolveClientKey(HttpServletRequest request) {
+        // X-Forwarded-For ヘッダ値を取得する（リバースプロキシが付与する転送元 IP）
+        String forwarded = request.getHeader("X-Forwarded-For");
+        // ヘッダが存在し空でない場合はカンマ区切りの先頭値（最初の送信元 IP）を使う
+        if (forwarded != null && !forwarded.isBlank()) {
+            // カンマ区切りで複数の IP が連なる場合は先頭だけ取り出してトリムする
+            return forwarded.split(",", 2)[0].strip();
+        }
+        // ヘッダが無い場合（直接接続）は接続元 IP をそのまま使う
+        return request.getRemoteAddr();
     }
 
     // 送信元のカウントを 1 増やし、単位時間内の上限を超えたかを返す
