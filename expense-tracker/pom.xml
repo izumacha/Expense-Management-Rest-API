@@ -81,12 +81,32 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Spring Security（認証・認可フレームワーク）の依存 -->
+        <!-- MVP フェーズでは全エンドポイントを permitAll にしているが、将来の認証追加に備えて -->
+        <!-- SecurityConfig.java でその設計意図をコードとして明示するために導入する -->
+        <dependency>
+            <!-- Spring Boot のグループ ID -->
+            <groupId>org.springframework.boot</groupId>
+            <!-- Security スターター -->
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
         <!-- テスト関連の依存（JUnit 等を含む） -->
         <dependency>
             <!-- Spring Boot のグループ ID -->
             <groupId>org.springframework.boot</groupId>
             <!-- テストスターター -->
             <artifactId>spring-boot-starter-test</artifactId>
+            <!-- テスト時のみ有効なスコープ -->
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Spring Security のテスト支援ライブラリ（MockMvc でのセキュリティ設定検証用） -->
+        <dependency>
+            <!-- Spring Security のグループ ID -->
+            <groupId>org.springframework.security</groupId>
+            <!-- テスト用モジュール -->
+            <artifactId>spring-security-test</artifactId>
             <!-- テスト時のみ有効なスコープ -->
             <scope>test</scope>
         </dependency>
