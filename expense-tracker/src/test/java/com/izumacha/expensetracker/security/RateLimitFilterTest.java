@@ -27,6 +27,10 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.TestPropertySource;
 // HTTP リクエストを擬似実行するクライアント
 import org.springframework.test.web.servlet.MockMvc;
+// @WebMvcTest のデフォルト認証要求を無効化し、実際の SecurityConfig（permitAll）を読み込むために使う
+import org.springframework.context.annotation.Import;
+// セキュリティ設定クラス（anyRequest().permitAll() を定義）
+import com.izumacha.expensetracker.config.SecurityConfig;
 
 // any() マッチャを取り込む（Mockito）
 import static org.mockito.ArgumentMatchers.any;
@@ -39,6 +43,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 // レート制限フィルタの挙動を検証する（上限を 2 に下げて超過を起こす）
 @WebMvcTest(CategoryController.class)
+// @WebMvcTest はデフォルトで Spring Security の認証要求を有効化するが、
+// 実際のアプリは anyRequest().permitAll() なので SecurityConfig を明示インポートして一致させる
+@Import(SecurityConfig.class)
 // 単位時間あたりの上限を 2 に、ウィンドウを十分長くしてテスト中に切り替わらないようにする
 @TestPropertySource(properties = {"app.rate-limit.capacity=2", "app.rate-limit.window-seconds=3600"})
 class RateLimitFilterTest {
