@@ -60,6 +60,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     // IPv6 アドレスの形式を確認するパターン（例: ::1、2001:db8::1）。
     // 16 進数とコロンのみで構成され、最長 39 文字以内に収まる形式を許容する。
+    // 【意図的な寛容設計】完全な IPv6 構文検証（グループ数・二重コロン規則等）をここで行うと
+    // 正規表現が複雑になり ReDoS のリスクが高まる（CLAUDE.md §9）。そのため形式チェックを
+    // 「16 進数とコロンのみ」に留めている。`:::` のような非合法な IPv6 風文字列が通過しても
+    // レート制限キーとして格納されるだけであり、攻撃者にとって有利な挙動にはならない
+    // （攻撃者は末尾トークンを偽装できないため）。
     private static final Pattern IPV6_PATTERN =
             Pattern.compile("^[0-9a-fA-F:]{2,39}$");
 
@@ -69,8 +74,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final long windowSeconds;
     // X-Forwarded-For ヘッダを信頼するかどうか（リバースプロキシ配下のときのみ true にする）
     // デフォルト false: 直接接続を前提とし、ユーザーが偽装できる X-Forwarded-For を無視する。
-    // リバースプロキシ配下に置く場合は app.rate-limit.trust-x-forwarded-for=true を設定し、
-    // プロキシ以外からは X-Forwarded-For を書き換えられないようネットワーク側で保護すること。
+    //
+    // 【true に設定する場合の必須要件 — 設定ミスは深刻なセキュリティ問題を招く】
+    // (1) リバースプロキシは "X-Forwarded-For: <既存値>, <接続元IP>" の形式で
+    //     接続元 IP を末尾（最後のトークン）に追記するよう設定すること。
+    //     末尾トークンはプロキシが付与するため攻撃者が偽装できないが、
+    //     プロキシが先頭に追記したり、ヘッダをそのままスルーしたりする設定では
+    //     攻撃者が末尾トークンを制御でき、他クライアントのレート制限枠を消費させられる。
+    // (2) プロキシが既存の X-Forwarded-For ヘッダをクライアント側からの値ごと信用して
+    //     そのまま転送しないこと（先頭にクライアントが任意値を挿入できてしまう）。
+    // (3) プロキシへの直接アクセスをネットワーク層でブロックし、
+    //     外部からアプリに X-Forwarded-For を直送できないようにすること（§9）。
     private final boolean trustXForwardedFor;
     // エラー応答を JSON で書き出すための ObjectMapper
     private final ObjectMapper objectMapper;
