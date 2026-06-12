@@ -21,11 +21,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 // 入出力例外型
 import java.io.IOException;
+// IP 形式検証に使う正規表現パターン
+import java.util.regex.Pattern;
 // 送信元ごとのカウンタを保持するスレッドセーフなマップ
 import java.util.concurrent.ConcurrentHashMap;
 // 単位時間内のカウントをスレッドセーフに数えるための整数
 import java.util.concurrent.atomic.AtomicInteger;
-// 最後に警告ログを出したウィンドウ番号をスレッドセーフに保持するための長整数
+// 最後に警告・掃除を実行したウィンドウ番号をスレッドセーフに保持するための長整数
 import java.util.concurrent.atomic.AtomicLong;
 // プロパティ値を注入するアノテーション
 import org.springframework.beans.factory.annotation.Value;
@@ -51,6 +53,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // 追跡する送信元 IP の最大数（無制限に増やしてメモリを枯渇させないための上限）
     private static final int MAX_TRACKED_CLIENTS = 10_000;
 
+    // IPv4 アドレスの形式を確認するパターン（例: 192.168.0.1）。
+    // ネストした量指定子を使わないため ReDoS が起きない（§9）。
+    private static final Pattern IPV4_PATTERN =
+            Pattern.compile("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$");
+
+    // IPv6 アドレスの形式を確認するパターン（例: ::1、2001:db8::1）。
+    // 16 進数とコロンのみで構成され、最長 39 文字以内に収まる形式を許容する。
+    private static final Pattern IPV6_PATTERN =
+            Pattern.compile("^[0-9a-fA-F:]{2,39}$");
+
     // 1 つの送信元が単位時間内に許可されるリクエスト数の上限
     private final int capacity;
     // カウントの単位時間（秒）
@@ -69,6 +81,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // 最後に上限到達の警告ログを出したウィンドウ番号（同一ウィンドウ内での警告ログ連発＝ログ起因の DoS を防ぐ）。
     // 初期値 -1 は「まだ一度も警告を出していない」ことを表す。
     private final AtomicLong lastWarnedWindow = new AtomicLong(-1);
+
+    // 最後に古いエントリを掃除したウィンドウ番号（同一ウィンドウ内での重複掃除を防ぐ）。
+    // 初期値 -1 は「まだ一度も掃除していない」ことを表す。
+    private final AtomicLong lastCleanedWindow = new AtomicLong(-1);
 
     // 設定値と ObjectMapper をコンストラクタで受け取る
     public RateLimitFilter(
@@ -114,6 +130,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // false（デフォルト）の場合は getRemoteAddr() だけを使う。
     // X-Forwarded-For はユーザーが任意の値を送れるヘッダであるため、
     // 信頼できるリバースプロキシが設定・書き換える保証がなければ使ってはいけない。
+    //
+    // 【末尾トークンを採用する理由】
+    // 複数プロキシを経由すると "client, proxy1, proxy2, ..." の形式になる。
+    // 先頭（index 0）はクライアントが任意に偽装できる。
+    // 末尾（最後のトークン）は直近の信頼プロキシが接続元として記録した IP であり
+    // ユーザーが書き換えられない。Spring の ForwardedHeaderFilter も同じ方針を採用している。
     private String resolveClientKey(HttpServletRequest request) {
         // trust-x-forwarded-for が有効でない場合はヘッダを無視して接続元 IP をそのまま使う
         if (!trustXForwardedFor) {
@@ -121,23 +143,49 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
         // X-Forwarded-For ヘッダ値を取得する（リバースプロキシが付与する転送元 IP）
         String forwarded = request.getHeader("X-Forwarded-For");
-        // ヘッダが存在し空でない場合はカンマ区切りの先頭値（最初の送信元 IP）を使う
+        // ヘッダが存在し空でない場合は末尾トークン（信頼プロキシが記録した IP）を使う
         if (forwarded != null && !forwarded.isBlank()) {
-            // カンマ区切りで複数の IP が連なる場合は先頭だけ取り出してトリムする
-            return forwarded.split(",", 2)[0].strip();
+            // カンマ区切りで複数の IP が連なる場合は末尾だけ取り出してトリムする
+            String[] parts = forwarded.split(",");
+            // 末尾のトークンがレート制限キーとして使う候補 IP
+            String candidate = parts[parts.length - 1].strip();
+            // IP アドレスの形式でない場合は偽装値または設定ミスの可能性があるためフォールバックする（§9 fail-closed）
+            if (looksLikeIp(candidate)) {
+                // 正常な IP 形式ならそれをレート制限キーとして返す
+                return candidate;
+            }
+            // 不正な形式の場合は警告を出して直接接続元 IP に切り替える
+            log.debug("X-Forwarded-For の末尾値 '{}' が IP 形式でないため getRemoteAddr() にフォールバックします", candidate);
         }
-        // ヘッダが無い場合（直接接続）は接続元 IP をそのまま使う
+        // ヘッダが無い場合または不正な形式の場合は接続元 IP をそのまま使う
         return request.getRemoteAddr();
+    }
+
+    // 引数が IPv4 または IPv6 アドレスの形式に見えるかを確認する（DNS 名前解決を行わない）。
+    // 外部入力を直接渡すため ReDoS の起きないシンプルなパターンのみ使用する（§9）。
+    private static boolean looksLikeIp(String candidate) {
+        // null または過剰な長さ（IPv6 最大 45 文字）は IP ではないとみなす
+        if (candidate == null || candidate.length() > 45) return false;
+        // IPv4 形式（例: 192.168.0.1）または IPv6 形式（例: ::1、2001:db8::1）を許容する
+        return IPV4_PATTERN.matcher(candidate).matches()
+                || IPV6_PATTERN.matcher(candidate).matches();
     }
 
     // 送信元のカウントを 1 増やし、単位時間内の上限を超えたかを返す
     private boolean isOverLimit(String clientKey) {
         // 現在時刻が属する固定ウィンドウ番号（秒を単位時間で割った商）を求める
         long currentWindow = System.currentTimeMillis() / 1000 / windowSeconds;
-        // マップが肥大化しないよう、上限に達したら古いウィンドウの項目を掃除する
+        // マップが肥大化しないよう、上限に達したら古いウィンドウの項目を掃除する。
+        // ただし O(N) のスキャンが毎リクエスト走るのを防ぐため、ウィンドウが切り替わったときだけ掃除する（1 ウィンドウ 1 回に抑制）。
         if (counters.size() >= MAX_TRACKED_CLIENTS) {
-            // 現在ウィンドウより古い項目を取り除く（メモリ上限の維持）
-            counters.values().removeIf(window -> window.windowId != currentWindow);
+            // 直近に掃除したウィンドウ番号を読み出す
+            long previouslyCleaned = lastCleanedWindow.get();
+            // まだこのウィンドウで掃除していない、かつ自分が代表として番号を更新できた場合だけ掃除を実行する
+            if (previouslyCleaned != currentWindow
+                    && lastCleanedWindow.compareAndSet(previouslyCleaned, currentWindow)) {
+                // 現在ウィンドウより古い項目を取り除く（メモリ上限の維持）
+                counters.values().removeIf(window -> window.windowId != currentWindow);
+            }
         }
         // 掃除後もまだ上限に達しているか（同一ウィンドウに大量の送信元がいる状況）を判定する
         // （compute の中ではマップを変更できないため、ここで一度だけ判定して使い回す）
@@ -160,7 +208,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 // 既存をそのまま返す
                 return existing;
             }
-            // 追跡上限に達している新規送信元は、メモリ枯渇を避けるため追跡対象に加えない（安全側に通す）
+            // 追跡上限に達している新規送信元は、メモリ枯渇を避けるため追跡対象に加えない（安全側に通す）。
+            // この判定と compute の間には TOCTOU があるが、結果は「新規クライアントが追跡されず通過する」だけであり、
+            // レート制限の意図（既存クライアントの制限）を壊さないため許容している（設計上の意識的なトレードオフ）。
             if (existing == null && atCapacity) {
                 // マッピングを作らない（null を返すと項目は追加されない）
                 return null;

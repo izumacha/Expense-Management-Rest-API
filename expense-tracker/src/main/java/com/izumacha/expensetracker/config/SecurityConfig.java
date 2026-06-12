@@ -9,6 +9,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 // Lambda DSL で CSRF 設定を操作するための設定クラス
 import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
+// セッション生成ポリシー（STATELESS を指定して JSESSIONID Cookie を排除するために使う）
+import org.springframework.security.config.http.SessionCreationPolicy;
 // Bean を宣言するアノテーション
 import org.springframework.context.annotation.Bean;
 // このクラス自体を Spring に設定クラスとして登録するアノテーション
@@ -74,6 +76,20 @@ public class SecurityConfig {
         http.authorizeHttpRequests(
                 // すべてのリクエストを認証なしで許可する（MVP フェーズのみ。本番では変更すること）
                 auth -> auth.anyRequest().permitAll()
+        );
+        // -------------------------------------------------------------------
+
+        // -------------------------------------------------------------------
+        // セッション管理の設定
+        // -------------------------------------------------------------------
+        // REST API はステートレス（状態を持たない）設計のため、セッションを生成しない。
+        // STATELESS を指定することで Spring Security が HttpSession を生成しなくなり、
+        // レスポンスに JSESSIONID Cookie が Set-Cookie されなくなる。
+        // セッションが不要な純粋 REST API では、セッション管理のオーバーヘッドを排除できる
+        // うえ、Cookie のフィッシング利用リスクも下げられる（CLAUDE.md §9）。
+        http.sessionManagement(
+                // セッション生成ポリシーを「一切作らない」に設定する
+                sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
         );
         // -------------------------------------------------------------------
 
