@@ -27,8 +27,11 @@ import org.springframework.context.annotation.Configuration;
  * <ul>
  *   <li>JWT または OAuth2 による認証フローの実装（{@code http.oauth2ResourceServer()} 等）</li>
  *   <li>エンドポイントごとのロールベース認可（{@code .hasRole("USER")} 等）の追加</li>
- *   <li>CSRF 保護の再評価（REST API ＋ SameSite Cookie の場合は無効化が認められることがある）</li>
- *   <li>パスワードのハッシュ化（{@link org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder}）</li>
+ *   <li>CSRF 保護の再評価（ステートレス Bearer 認証〔JWT / OAuth2〕を使う場合に限り無効化が正当化される。
+ *       Cookie 認証を追加する場合は必ず {@code csrf().enable()} で CSRF 保護を再有効化すること。
+ *       SameSite Cookie は CSRF 保護の代替ではなく多層防御として併用するものであり、
+ *       登録ドメインを他サービスと共有する場合は SameSite だけでは防げない〔CLAUDE.md §9〕）</li>
+ *   <li>CORS 設定（{@code http.cors()} で許可オリジンを明示的に制限すること）</li>
  * </ul>
  */
 // このクラスが Spring の設定クラスであることを示す
