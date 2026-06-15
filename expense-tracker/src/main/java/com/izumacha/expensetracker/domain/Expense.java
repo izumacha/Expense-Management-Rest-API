@@ -7,6 +7,8 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 // フェッチ方式の列挙
 import jakarta.persistence.FetchType;
+// テーブルのインデックス定義用アノテーション
+import jakarta.persistence.Index;
 // 主キーの生成方式指定用アノテーション
 import jakarta.persistence.GeneratedValue;
 // 主キー生成戦略の列挙
@@ -34,8 +36,14 @@ import lombok.Setter;
 
 // 支出を表すエンティティ
 @Entity
-// テーブル名を指定
-@Table(name = "expenses")
+// テーブル名と、よく絞り込む列のインデックスを指定する。
+// 一覧・月次集計は spent_on の範囲条件／並び替え／GROUP BY で常に使うため先頭に置く。
+// category_id は外部キーだが PostgreSQL は FK に自動インデックスを張らないため明示する。
+// いずれも全件走査（sequential scan）を避けるためのもの（共通規約 §8）。
+@Table(name = "expenses", indexes = {
+    @Index(name = "idx_expenses_spent_on", columnList = "spent_on"),
+    @Index(name = "idx_expenses_category_id", columnList = "category_id")
+})
 // ゲッターを自動生成
 @Getter
 // セッターを自動生成
