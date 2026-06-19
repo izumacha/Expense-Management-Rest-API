@@ -216,13 +216,32 @@ class ExpenseServiceTest {
     // findById: 存在しない ID は NotFoundException になることを検証する
     @Test
     void findById_不在時は404例外() {
-        // 支出検索が空を返すようモックする
-        when(expenseRepository.findById(123L)).thenReturn(Optional.empty());
+        // 詳細取得はカテゴリ込みクエリを使うため、そちらが空を返すようモックする
+        when(expenseRepository.findByIdWithCategory(123L)).thenReturn(Optional.empty());
 
         // findById 呼び出しで例外になることを検証する
         assertThatThrownBy(() -> expenseService.findById(123L))
                 // 例外型が NotFoundException であることを確認する
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    // findById: 存在する ID はカテゴリ込みクエリで取得され DTO が返ることを検証する（N+1 回避の経路）
+    @Test
+    void findById_存在時はカテゴリ込みで取得して返す() {
+        // 既存カテゴリ（食費）を用意する
+        Category food = category(1L, "食費");
+        // 詳細取得はカテゴリ込みクエリを使うため、そちらが既存支出を返すようモックする
+        when(expenseRepository.findByIdWithCategory(10L))
+                // 採番済みの支出（id=10・食費・1280円）を返す
+                .thenReturn(Optional.of(expense(10L, food, "1280", LocalDate.of(2026, 6, 9))));
+
+        // テスト対象の findById を呼び出す
+        ExpenseResponse response = expenseService.findById(10L);
+
+        // 返却 DTO の ID が一致することを検証する
+        assertThat(response.id()).isEqualTo(10L);
+        // カテゴリ名が取得できていることを検証する（カテゴリ込み取得の確認）
+        assertThat(response.categoryName()).isEqualTo("食費");
     }
 
     // update: 支出もカテゴリも存在すれば更新され DTO が返ることを検証する

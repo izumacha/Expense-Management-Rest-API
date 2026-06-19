@@ -14,6 +14,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 // 一覧の戻り型
 import java.util.List;
+// 関連が初期化済み（ロード済み）かを判定する Hibernate ユーティリティ
+import org.hibernate.Hibernate;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
 // ページ指定（ページ番号・件数）を生成する型
@@ -25,6 +27,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 // 依存を注入するアノテーション
 import org.springframework.beans.factory.annotation.Autowired;
+// 永続化コンテキストを直接操作するテスト用 EntityManager
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 
 // 検証用の assertThat を取り込む（AssertJ）
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +43,10 @@ class ExpenseRepositoryTest extends AbstractRepositoryTest {
     // 準備に使うカテゴリリポジトリ
     @Autowired
     private CategoryRepository categoryRepository;
+
+    // 永続化コンテキストを空にして遅延ロードの差を顕在化させるために使う
+    @Autowired
+    private TestEntityManager entityManager;
 
     // 食費カテゴリ（各テストで採番される）
     private Category food;
@@ -135,6 +143,33 @@ class ExpenseRepositoryTest extends AbstractRepositoryTest {
         assertThat(result.getTotalElements()).isEqualTo(4);
         // 総ページ数が 2 ページであることを検証する
         assertThat(result.getTotalPages()).isEqualTo(2);
+    }
+
+    // findByIdWithCategory: JOIN FETCH で支出とカテゴリを1クエリで取得し、
+    // 永続化コンテキストを空にした後でもカテゴリが初期化済み（N+1 が起きない）であることを検証する
+    @Test
+    void findByIdWithCategory_カテゴリを同時に取得しN1を避ける() {
+        // 食費の支出を1件保存して採番する
+        Expense saved = expenseRepository.save(expense(food, "1234", LocalDate.of(2026, 6, 20)));
+        // 変更をDBへ反映し、永続化コンテキストを空にする（以降の取得で遅延ロードの差が出る）
+        entityManager.flush();
+        // 1次キャッシュを破棄して、取得時に本当にカテゴリまで取れているか確かめられるようにする
+        entityManager.clear();
+
+        // 詳細取得用のカテゴリ込みクエリで支出を取得する
+        Expense found = expenseRepository.findByIdWithCategory(saved.getId()).orElseThrow();
+
+        // JOIN FETCH により、追加クエリ無しでカテゴリが初期化済みであることを検証する
+        assertThat(Hibernate.isInitialized(found.getCategory())).isTrue();
+        // 取得したカテゴリ名が正しいことを検証する
+        assertThat(found.getCategory().getName()).isEqualTo("食費");
+    }
+
+    // findByIdWithCategory: 該当が無ければ空の Optional を返すことを検証する
+    @Test
+    void findByIdWithCategory_不在なら空を返す() {
+        // 存在しない ID（十分大きい値）で取得すると空が返ることを検証する
+        assertThat(expenseRepository.findByIdWithCategory(999_999L)).isEmpty();
     }
 
     // summarizeByCategory: カテゴリ別合計を金額降順で返すことを検証する

@@ -96,8 +96,8 @@ public class ExpenseService {
     // 支出を1件取得する
     @Transactional(readOnly = true)
     public ExpenseResponse findById(Long id) {
-        // ID から支出を取得し DTO へ変換して返す
-        return ExpenseResponse.from(findExpenseOrThrow(id));
+        // DTO 変換でカテゴリ名を参照するため、カテゴリ込みで取得して N+1 を避ける（共通規約 §8）
+        return ExpenseResponse.from(findExpenseWithCategoryOrThrow(id));
     }
 
     // 支出を更新する
@@ -165,10 +165,18 @@ public class ExpenseService {
                 .orElseThrow(() -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND));
     }
 
-    // 支出を取得し、無ければ404例外を投げる
+    // 支出を取得し、無ければ404例外を投げる（更新・削除用。カテゴリ参照が不要な経路）
     private Expense findExpenseOrThrow(Long id) {
         // ID で支出を検索し、無ければ例外を送出する
         return expenseRepository.findById(id)
+                // 見つからない場合は内部 ID を含めない安全な文言で未存在例外を投げる
+                .orElseThrow(() -> new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND));
+    }
+
+    // 支出をカテゴリ込みで取得し、無ければ404例外を投げる（詳細取得用。DTO 変換でカテゴリ名を参照するため eager-load する）
+    private Expense findExpenseWithCategoryOrThrow(Long id) {
+        // ID で支出をカテゴリごと検索し、無ければ例外を送出する
+        return expenseRepository.findByIdWithCategory(id)
                 // 見つからない場合は内部 ID を含めない安全な文言で未存在例外を投げる
                 .orElseThrow(() -> new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND));
     }
