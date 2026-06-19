@@ -9,6 +9,8 @@ import com.izumacha.expensetracker.dto.response.CategorySummary;
 import java.time.LocalDate;
 // 一覧の戻り型
 import java.util.List;
+// 値が無いことを表す Optional 型
+import java.util.Optional;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
 // ページ指定（ページ番号・件数）を表す型
@@ -53,6 +55,17 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
             // ページ指定（ページ番号・件数）
             Pageable pageable
     );
+
+    // 1件の詳細取得用に、カテゴリを JOIN FETCH で同時取得するクエリ。
+    // Expense.category は遅延ロード（FetchType.LAZY）のため、既定の findById だけでは
+    // ExpenseResponse 生成時のカテゴリ参照で追加クエリが走り N+1 になる。
+    // ここで多対1のカテゴリを一緒に取得し、詳細取得を1クエリに収める（共通規約 §8）。
+    @Query("""
+            SELECT e FROM Expense e
+            JOIN FETCH e.category
+            WHERE e.id = :id
+            """)
+    Optional<Expense> findByIdWithCategory(@Param("id") Long id);
 
     // 月次のカテゴリ別合計を GROUP BY で集計するクエリ
     @Query("""
