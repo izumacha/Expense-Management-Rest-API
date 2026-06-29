@@ -36,6 +36,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 // any() マッチャを取り込む（Mockito）
 import static org.mockito.ArgumentMatchers.any;
+// 引数が特定の値と一致することを表す eq マッチャを取り込む（Mockito）
+import static org.mockito.ArgumentMatchers.eq;
 // 戻り値を設定する when を取り込む（Mockito）
 import static org.mockito.Mockito.when;
 // 例外送出を設定する doThrow を取り込む（Mockito）
@@ -44,6 +46,8 @@ import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 // GET リクエストを組み立てる get を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+// PUT リクエストを組み立てる put を取り込む
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 // DELETE リクエストを組み立てる delete を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 // レスポンスのステータスを検証する status を取り込む
@@ -209,6 +213,85 @@ class ExpenseControllerTest {
 
         // 存在しない ID で詳細を GET する
         mockMvc.perform(get("/api/expenses/404"))
+                // ステータスが 404 であることを検証する
+                .andExpect(status().isNotFound())
+                // 本体の status フィールドが 404 であることを検証する
+                .andExpect(jsonPath("$.status").value(404));
+    }
+
+    // PUT: 正しい入力なら 200 OK と更新後の本体が返ることを検証する
+    @Test
+    void 支出更新_正常時は200() throws Exception {
+        // サービスが返す更新後の DTO を用意する
+        ExpenseResponse dto = new ExpenseResponse(
+                // ID（更新対象と同じ）
+                5L,
+                // 更新後の金額
+                new BigDecimal("500"),
+                // カテゴリ ID
+                1L,
+                // カテゴリ名
+                "食費",
+                // 更新後の説明
+                "修正後",
+                // 支出日
+                LocalDate.of(2026, 6, 10),
+                // 作成日時
+                LocalDateTime.of(2026, 6, 10, 9, 0));
+        // サービスの update が ID 5 の更新で上記 DTO を返すようモックする
+        when(expenseService.update(eq(5L), any())).thenReturn(dto);
+
+        // 正しい JSON ボディで PUT する
+        mockMvc.perform(put("/api/expenses/5")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // リクエスト本体を渡す
+                        .content("""
+                                {"amount":500,"categoryId":1,"description":"修正後","spentOn":"2026-06-10"}
+                                """))
+                // ステータスが 200 であることを検証する
+                .andExpect(status().isOk())
+                // 本体の id が 5 であることを検証する
+                .andExpect(jsonPath("$.id").value(5))
+                // 本体のカテゴリ名が食費であることを検証する
+                .andExpect(jsonPath("$.categoryName").value("食費"));
+    }
+
+    // PUT: 金額が 0 以下なら検証で 400 になることを検証する（更新経路でも @Valid が効くことを確認）
+    @Test
+    void 支出更新_金額0以下は400() throws Exception {
+        // 金額 0 の不正な JSON で PUT する
+        mockMvc.perform(put("/api/expenses/5")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // amount=0 の本体を渡す
+                        .content("""
+                                {"amount":0,"categoryId":1,"spentOn":"2026-06-10"}
+                                """))
+                // ステータスが 400 であることを検証する
+                .andExpect(status().isBadRequest())
+                // 本体の status フィールドが 400 であることを検証する
+                .andExpect(jsonPath("$.status").value(400))
+                // 本体に message フィールドが存在することを検証する
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    // PUT: 更新対象が無ければサービスの例外で 404 になることを検証する
+    @Test
+    void 支出更新_対象不在時は404() throws Exception {
+        // サービスの update が NotFoundException を投げるようモックする
+        when(expenseService.update(eq(99L), any()))
+                // 未存在例外を投げる
+                .thenThrow(new NotFoundException("expense not found: id=99"));
+
+        // 存在しない ID で PUT する
+        mockMvc.perform(put("/api/expenses/99")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 正しい形式の本体を渡す（対象が無いことだけを検証する）
+                        .content("""
+                                {"amount":500,"categoryId":1,"spentOn":"2026-06-10"}
+                                """))
                 // ステータスが 404 であることを検証する
                 .andExpect(status().isNotFound())
                 // 本体の status フィールドが 404 であることを検証する
