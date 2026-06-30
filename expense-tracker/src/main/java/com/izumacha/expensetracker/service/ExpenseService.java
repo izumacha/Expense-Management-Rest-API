@@ -5,8 +5,10 @@ package com.izumacha.expensetracker.service;
 import com.izumacha.expensetracker.domain.Category;
 // 支出エンティティを参照する
 import com.izumacha.expensetracker.domain.Expense;
-// 支出作成・更新リクエスト DTO を参照する
+// 支出作成リクエスト DTO を参照する
 import com.izumacha.expensetracker.dto.request.CreateExpenseRequest;
+// 支出更新リクエスト DTO を参照する（作成と更新の API 契約を分離する）
+import com.izumacha.expensetracker.dto.request.UpdateExpenseRequest;
 // カテゴリ別集計 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategorySummary;
 // 支出返却 DTO を参照する
@@ -102,13 +104,13 @@ public class ExpenseService {
 
     // 支出を更新する
     @Transactional
-    public ExpenseResponse update(Long id, CreateExpenseRequest request) {
+    public ExpenseResponse update(Long id, UpdateExpenseRequest request) {
         // 更新対象の支出を取得する（無ければ404）
         Expense expense = findExpenseOrThrow(id);
         // カテゴリ ID から対象カテゴリを取得する（無ければ404）
         Category category = findCategoryOrThrow(request.categoryId());
         // リクエスト内容をエンティティへ反映する
-        applyRequest(expense, request, category);
+        applyUpdateRequest(expense, request, category);
         // 変更を保存する
         Expense saved = expenseRepository.save(expense);
         // 保存結果を DTO に変換して返す
@@ -145,8 +147,20 @@ public class ExpenseService {
         return new SummaryResponse(month, total, byCategory);
     }
 
-    // リクエスト内容をエンティティへ反映する共通処理
+    // 作成リクエストの内容を支出エンティティへ反映する（create 専用）
     private void applyRequest(Expense expense, CreateExpenseRequest request, Category category) {
+        // 金額を設定する
+        expense.setAmount(request.amount());
+        // カテゴリを設定する
+        expense.setCategory(category);
+        // 説明を設定する
+        expense.setDescription(request.description());
+        // 支出日を設定する
+        expense.setSpentOn(request.spentOn());
+    }
+
+    // 更新リクエストの内容を支出エンティティへ反映する（update 専用）
+    private void applyUpdateRequest(Expense expense, UpdateExpenseRequest request, Category category) {
         // 金額を設定する
         expense.setAmount(request.amount());
         // カテゴリを設定する
