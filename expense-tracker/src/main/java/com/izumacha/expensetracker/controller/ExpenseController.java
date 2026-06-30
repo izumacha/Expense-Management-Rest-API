@@ -1,8 +1,10 @@
 // コントローラパッケージ
 package com.izumacha.expensetracker.controller;
 
-// 支出作成・更新リクエスト DTO を参照する
+// 支出作成リクエスト DTO を参照する
 import com.izumacha.expensetracker.dto.request.CreateExpenseRequest;
+// 支出更新リクエスト DTO を参照する（作成と更新の API 契約を分離する）
+import com.izumacha.expensetracker.dto.request.UpdateExpenseRequest;
 // 支出返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.ExpenseResponse;
 // ページ形式の返却 DTO を参照する
@@ -96,8 +98,8 @@ public class ExpenseController {
     public ExpenseResponse update(
             // 更新対象の支出 ID
             @PathVariable("id") Long id,
-            // 更新内容（検証付き）
-            @Valid @RequestBody CreateExpenseRequest request) {
+            // 更新内容（検証付き。UpdateExpenseRequest で作成との API 契約を明示分離）
+            @Valid @RequestBody UpdateExpenseRequest request) {
         // サービスで支出を更新して返す
         return expenseService.update(id, request);
     }

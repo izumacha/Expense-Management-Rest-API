@@ -5,8 +5,10 @@ package com.izumacha.expensetracker.service;
 import com.izumacha.expensetracker.domain.Category;
 // 支出エンティティを参照する
 import com.izumacha.expensetracker.domain.Expense;
-// 支出作成・更新リクエスト DTO を参照する
+// 支出作成リクエスト DTO を参照する
 import com.izumacha.expensetracker.dto.request.CreateExpenseRequest;
+// 支出更新リクエスト DTO を参照する
+import com.izumacha.expensetracker.dto.request.UpdateExpenseRequest;
 // カテゴリ別集計 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategorySummary;
 // 支出返却 DTO を参照する
@@ -252,7 +254,7 @@ class ExpenseServiceTest {
         // 既存の支出（id=5）を用意する
         Expense existing = expense(5L, transport, "300", LocalDate.of(2026, 6, 1));
         // 更新リクエスト（金額と日付を変更）を用意する
-        CreateExpenseRequest request = new CreateExpenseRequest(
+        UpdateExpenseRequest request = new UpdateExpenseRequest(
                 // 新しい金額
                 new BigDecimal("480"),
                 // カテゴリ ID
@@ -285,7 +287,7 @@ class ExpenseServiceTest {
     @Test
     void update_対象不在時は404例外() {
         // 更新リクエストを用意する
-        CreateExpenseRequest request = new CreateExpenseRequest(
+        UpdateExpenseRequest request = new UpdateExpenseRequest(
                 // 金額
                 new BigDecimal("480"),
                 // カテゴリ ID
