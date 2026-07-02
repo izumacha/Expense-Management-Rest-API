@@ -71,7 +71,7 @@ public class ExpenseService {
         // 空の支出エンティティを生成する
         Expense expense = new Expense();
         // リクエスト内容をエンティティへ反映する
-        applyRequest(expense, request, category);
+        applyFields(expense, request.amount(), request.description(), request.spentOn(), category);
         // 保存して採番済みのインスタンスを取得する
         Expense saved = expenseRepository.save(expense);
         // 保存結果を DTO に変換して返す
@@ -110,7 +110,7 @@ public class ExpenseService {
         // カテゴリ ID から対象カテゴリを取得する（無ければ404）
         Category category = findCategoryOrThrow(request.categoryId());
         // リクエスト内容をエンティティへ反映する
-        applyUpdateRequest(expense, request, category);
+        applyFields(expense, request.amount(), request.description(), request.spentOn(), category);
         // 変更を保存する
         Expense saved = expenseRepository.save(expense);
         // 保存結果を DTO に変換して返す
@@ -147,28 +147,19 @@ public class ExpenseService {
         return new SummaryResponse(month, total, byCategory);
     }
 
-    // 作成リクエストの内容を支出エンティティへ反映する（create 専用）
-    private void applyRequest(Expense expense, CreateExpenseRequest request, Category category) {
+    // 作成・更新の両リクエストで共通の内容を支出エンティティへ反映する
+    // （CreateExpenseRequest/UpdateExpenseRequest の DTO 自体は API 契約として分離したまま維持し、
+    // ここではプリミティブな値だけを受け取ることでロジックの重複を1箇所に共通化する）
+    private void applyFields(Expense expense, BigDecimal amount, String description, LocalDate spentOn,
+            Category category) {
         // 金額を設定する
-        expense.setAmount(request.amount());
+        expense.setAmount(amount);
         // カテゴリを設定する
         expense.setCategory(category);
         // 説明を設定する
-        expense.setDescription(request.description());
+        expense.setDescription(description);
         // 支出日を設定する
-        expense.setSpentOn(request.spentOn());
-    }
-
-    // 更新リクエストの内容を支出エンティティへ反映する（update 専用）
-    private void applyUpdateRequest(Expense expense, UpdateExpenseRequest request, Category category) {
-        // 金額を設定する
-        expense.setAmount(request.amount());
-        // カテゴリを設定する
-        expense.setCategory(category);
-        // 説明を設定する
-        expense.setDescription(request.description());
-        // 支出日を設定する
-        expense.setSpentOn(request.spentOn());
+        expense.setSpentOn(spentOn);
     }
 
     // カテゴリを取得し、無ければ404例外を投げる
