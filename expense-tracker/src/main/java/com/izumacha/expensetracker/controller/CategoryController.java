@@ -11,12 +11,12 @@ import com.izumacha.expensetracker.dto.response.PageResponse;
 import com.izumacha.expensetracker.service.CategoryService;
 // リクエストボディの検証を有効化するアノテーション
 import jakarta.validation.Valid;
+// 作成したリソースの URI を組み立てる型
+import java.net.URI;
 // ページ指定（ページ番号・件数）を表す型
 import org.springframework.data.domain.Pageable;
 // 一覧取得時の既定ページサイズを指定するアノテーション
 import org.springframework.data.web.PageableDefault;
-// HTTP ステータスを表す列挙
-import org.springframework.http.HttpStatus;
 // HTTP レスポンス全体を表すクラス
 import org.springframework.http.ResponseEntity;
 // GET マッピング用アノテーション
@@ -45,13 +45,13 @@ public class CategoryController {
         this.categoryService = categoryService;
     }
 
-    // カテゴリを作成する（成功時 201）
+    // カテゴリを作成する（成功時 201。Location ヘッダに作成したリソースの URI を含める）
     @PostMapping
     public ResponseEntity<CategoryResponse> create(@Valid @RequestBody CreateCategoryRequest request) {
         // サービスでカテゴリを作成する
         CategoryResponse response = categoryService.create(request);
-        // 201 Created とともに作成結果を返す
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        // 201 Created と、作成したカテゴリを指す Location ヘッダ・作成結果を返す
+        return ResponseEntity.created(URI.create("/api/categories/" + response.id())).body(response);
     }
 
     // カテゴリ一覧をページ単位で取得する（成功時 200）

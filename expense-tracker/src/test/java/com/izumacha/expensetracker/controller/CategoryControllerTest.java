@@ -36,6 +36,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 // レスポンスのステータスを検証する status を取り込む
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+// レスポンスヘッダを検証する header を取り込む
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 // レスポンス本体を JSONPath で検証する jsonPath を取り込む
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
@@ -71,6 +73,8 @@ class CategoryControllerTest {
                                 """))
                 // ステータスが 201 であることを検証する
                 .andExpect(status().isCreated())
+                // Location ヘッダが作成したカテゴリを指していることを検証する
+                .andExpect(header().string("Location", "/api/categories/1"))
                 // 本体の id が 1 であることを検証する
                 .andExpect(jsonPath("$.id").value(1))
                 // 本体の name が食費であることを検証する

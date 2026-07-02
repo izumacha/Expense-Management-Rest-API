@@ -46,7 +46,8 @@ public class Category {
 
     // カテゴリ名を受け取るコンストラクタ
     public Category(String name) {
-        // 渡された名前をフィールドに設定する
-        this.name = name;
+        // 前後の空白を取り除いてから設定する（" 食費" と "食費" が別カテゴリとして
+        // 重複判定をすり抜けないように、生成経路をこのコンストラクタ 1 箇所に統一する）
+        this.name = (name == null) ? null : name.strip();
     }
 }

@@ -151,6 +151,24 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.message").value(ErrorMessages.BAD_REQUEST));
     }
 
+    // 未定義パス（存在しないURL）は 404 と {status,message} 形式になり、
+    // Spring Boot 既定の BasicErrorController 形式（timestamp/error/path 等）に化けないことを検証する
+    @Test
+    void 未定義パスは404で統一形式() throws Exception {
+        // どのコントローラにもマッピングされていないパスへ GET する
+        mockMvc.perform(get("/api/does-not-exist"))
+                // ステータスが 404 であることを検証する
+                .andExpect(status().isNotFound())
+                // 本体の status が 404 であることを検証する
+                .andExpect(jsonPath("$.status").value(404))
+                // 本体の message が安全な文言であることを検証する
+                .andExpect(jsonPath("$.message").value(ErrorMessages.PATH_NOT_FOUND))
+                // Spring Boot 既定のエラー本体が持つ timestamp フィールドが存在しないことを検証する
+                .andExpect(jsonPath("$.timestamp").doesNotExist())
+                // Spring Boot 既定のエラー本体が持つ path フィールドが存在しないことを検証する
+                .andExpect(jsonPath("$.path").doesNotExist());
+    }
+
     // 不正な JSON ボディは 400 のまま（catch-all で 500 に退行しない）であることを検証する
     @Test
     void 不正なJSONは400のまま() throws Exception {

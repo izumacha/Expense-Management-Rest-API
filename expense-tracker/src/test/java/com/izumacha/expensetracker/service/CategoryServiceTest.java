@@ -88,6 +88,25 @@ class CategoryServiceTest {
         assertThat(response.name()).isEqualTo("食費");
     }
 
+    // create: 前後に空白を含む名前は正規化（strip）されてから重複チェック・保存されることを検証する
+    @Test
+    void create_前後の空白は正規化してから重複チェックする() {
+        // 前後に空白を含む作成リクエスト（" 食費"）を用意する
+        CreateCategoryRequest request = new CreateCategoryRequest(" 食費 ");
+        // 正規化後の名前（"食費"）で重複チェックが false（重複なし）を返すようモックする
+        when(categoryRepository.existsByName("食費")).thenReturn(false);
+        // 保存時は正規化済み名前で採番済みのカテゴリを返すようモックする
+        when(categoryRepository.save(any(Category.class))).thenReturn(category(1L, "食費"));
+
+        // テスト対象の create を呼び出す
+        CategoryResponse response = categoryService.create(request);
+
+        // 返却 DTO の名前が正規化済み（空白なし）であることを検証する
+        assertThat(response.name()).isEqualTo("食費");
+        // 前後空白付きの生の値では重複チェックを呼んでいないことを検証する
+        verify(categoryRepository, never()).existsByName(" 食費 ");
+    }
+
     // create: 同名が既に存在すれば DuplicateException になり保存されないことを検証する
     @Test
     void create_事前チェックで重複なら409例外() {
