@@ -7,6 +7,8 @@ import com.izumacha.expensetracker.dto.response.CategoryResponse;
 import com.izumacha.expensetracker.dto.response.PageResponse;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
+// 未存在例外を参照する
+import com.izumacha.expensetracker.exception.NotFoundException;
 // カテゴリサービスを参照する
 import com.izumacha.expensetracker.service.CategoryService;
 
@@ -149,5 +151,39 @@ class CategoryControllerTest {
                 .andExpect(status().isOk())
                 // 本体 content 先頭の name が食費であることを検証する
                 .andExpect(jsonPath("$.content[0].name").value("食費"));
+    }
+
+    // GET /{id}: 作成時の Location（/api/categories/{id}）が指すリソースを取得でき、200 と本体を返すことを検証する
+    @Test
+    void カテゴリ詳細_200で返る() throws Exception {
+        // サービスの findById が対象カテゴリを返すようモックする
+        when(categoryService.findById(1L))
+                // ID 採番済みのカテゴリ DTO を返す
+                .thenReturn(new CategoryResponse(1L, "食費"));
+
+        // Location が指す詳細エンドポイントへ GET する
+        mockMvc.perform(get("/api/categories/1"))
+                // ステータスが 200 であることを検証する
+                .andExpect(status().isOk())
+                // 本体の id が 1 であることを検証する
+                .andExpect(jsonPath("$.id").value(1))
+                // 本体の name が食費であることを検証する
+                .andExpect(jsonPath("$.name").value("食費"));
+    }
+
+    // GET /{id}: 対象が無ければサービスの例外で 404 になることを検証する
+    @Test
+    void カテゴリ詳細_不在時は404() throws Exception {
+        // サービスの findById が NotFoundException を投げるようモックする
+        when(categoryService.findById(404L))
+                // 未存在例外を投げる
+                .thenThrow(new NotFoundException("category not found: id=404"));
+
+        // 存在しない ID で詳細を GET する
+        mockMvc.perform(get("/api/categories/404"))
+                // ステータスが 404 であることを検証する
+                .andExpect(status().isNotFound())
+                // 本体の status フィールドが 404 であることを検証する
+                .andExpect(jsonPath("$.status").value(404));
     }
 }

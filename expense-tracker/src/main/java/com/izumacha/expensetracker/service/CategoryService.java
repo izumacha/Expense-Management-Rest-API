@@ -13,6 +13,8 @@ import com.izumacha.expensetracker.dto.response.PageResponse;
 import com.izumacha.expensetracker.exception.DuplicateException;
 // 外部向けエラーメッセージ定数を参照する
 import com.izumacha.expensetracker.exception.ErrorMessages;
+// 未存在例外を参照する（404 相当。指定 ID のカテゴリが無いとき送出する）
+import com.izumacha.expensetracker.exception.NotFoundException;
 // カテゴリリポジトリを参照する
 import com.izumacha.expensetracker.repository.CategoryRepository;
 // 一意制約違反を検出する例外
@@ -63,6 +65,17 @@ public class CategoryService {
             // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する
             throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
         }
+    }
+
+    // 指定 ID のカテゴリを 1 件取得する（作成時の Location ヘッダが指す取得用エンドポイントの実体）
+    @Transactional(readOnly = true)
+    public CategoryResponse findById(Long id) {
+        // 主キーでカテゴリを検索し、存在すれば DTO へ変換して返す
+        return categoryRepository.findById(id)
+                // エンティティを安定した契約の DTO へ変換する
+                .map(CategoryResponse::from)
+                // 見つからなければ内部 ID を含めない安全な文言で 404 相当の例外を送出する
+                .orElseThrow(() -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND));
     }
 
     // カテゴリ一覧をページ単位で取得する

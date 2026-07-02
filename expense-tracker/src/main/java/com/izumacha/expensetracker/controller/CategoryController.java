@@ -21,6 +21,8 @@ import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 // GET マッピング用アノテーション
 import org.springframework.web.bind.annotation.GetMapping;
+// パス変数（URL 中の {id} など）を取得するアノテーション
+import org.springframework.web.bind.annotation.PathVariable;
 // POST マッピング用アノテーション
 import org.springframework.web.bind.annotation.PostMapping;
 // リクエストボディ取得用アノテーション
@@ -52,6 +54,15 @@ public class CategoryController {
         CategoryResponse response = categoryService.create(request);
         // 201 Created と、作成したカテゴリを指す Location ヘッダ・作成結果を返す
         return ResponseEntity.created(URI.create("/api/categories/" + response.id())).body(response);
+    }
+
+    // カテゴリ詳細を取得する（成功時 200）。作成時の Location ヘッダ（/api/categories/{id}）が
+    // 指す取得用エンドポイント。存在しない ID はサービスが 404 相当の例外を送出する。
+    // 一覧の固定パス（@GetMapping）と衝突しないよう、可変パス {id} をこの順序で定義する。
+    @GetMapping("/{id}")
+    public CategoryResponse detail(@PathVariable("id") Long id) {
+        // サービスで指定 ID のカテゴリを取得して返す
+        return categoryService.findById(id);
     }
 
     // カテゴリ一覧をページ単位で取得する（成功時 200）
