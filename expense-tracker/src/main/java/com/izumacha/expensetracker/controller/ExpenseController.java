@@ -15,12 +15,12 @@ import com.izumacha.expensetracker.dto.response.SummaryResponse;
 import com.izumacha.expensetracker.service.ExpenseService;
 // リクエストボディの検証を有効化するアノテーション
 import jakarta.validation.Valid;
+// 作成したリソースの URI を組み立てる型
+import java.net.URI;
 // ページ指定（ページ番号・件数）を表す型
 import org.springframework.data.domain.Pageable;
 // 一覧取得時の既定ページサイズを指定するアノテーション
 import org.springframework.data.web.PageableDefault;
-// HTTP ステータスを表す列挙
-import org.springframework.http.HttpStatus;
 // HTTP レスポンス全体を表すクラス
 import org.springframework.http.ResponseEntity;
 // DELETE マッピング用アノテーション
@@ -57,13 +57,13 @@ public class ExpenseController {
         this.expenseService = expenseService;
     }
 
-    // 支出を登録する（成功時 201）
+    // 支出を登録する（成功時 201。Location ヘッダに作成したリソースの URI を含める）
     @PostMapping
     public ResponseEntity<ExpenseResponse> create(@Valid @RequestBody CreateExpenseRequest request) {
         // サービスで支出を登録する
         ExpenseResponse response = expenseService.create(request);
-        // 201 Created とともに登録結果を返す
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        // 201 Created と、作成した支出を指す Location ヘッダ・登録結果を返す
+        return ResponseEntity.created(URI.create("/api/expenses/" + response.id())).body(response);
     }
 
     // 支出一覧をページ単位で取得する（月・カテゴリで絞込、両方任意。成功時 200）

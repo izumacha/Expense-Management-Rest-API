@@ -52,6 +52,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 // レスポンスのステータスを検証する status を取り込む
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+// レスポンスヘッダを検証する header を取り込む
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 // レスポンス本体を JSONPath で検証する jsonPath を取り込む
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
@@ -101,6 +103,8 @@ class ExpenseControllerTest {
                                 """))
                 // ステータスが 201 であることを検証する
                 .andExpect(status().isCreated())
+                // Location ヘッダが作成した支出を指していることを検証する
+                .andExpect(header().string("Location", "/api/expenses/10"))
                 // 本体の id が 10 であることを検証する
                 .andExpect(jsonPath("$.id").value(10))
                 // 本体のカテゴリ名が食費であることを検証する
