@@ -42,13 +42,17 @@ public class CategoryService {
     // カテゴリを新規作成する
     @Transactional
     public CategoryResponse create(CreateCategoryRequest request) {
+        // 前後の空白を取り除く（" 食費" と "食費" を別名として扱わないため。
+        // Category のコンストラクタでも同じ正規化を行うが、重複チェックを
+        // 実際に保存される値と一致させるためここでも明示的に揃えておく）
+        String normalizedName = request.name().strip();
         // 同名カテゴリが既に存在する場合は重複例外を投げる（409）
-        if (categoryRepository.existsByName(request.name())) {
+        if (categoryRepository.existsByName(normalizedName)) {
             // 入力値を含めない安全な文言で重複を示す例外を送出する
             throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
         }
-        // リクエストからエンティティを生成する
-        Category category = new Category(request.name());
+        // 正規化済みの名前からエンティティを生成する
+        Category category = new Category(normalizedName);
         // 事前チェックをすり抜けた同時実行の重複は一意制約違反として捕捉する
         try {
             // エンティティを保存して採番済みのインスタンスを取得する
