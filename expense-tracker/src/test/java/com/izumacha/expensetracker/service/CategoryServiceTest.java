@@ -11,11 +11,15 @@ import com.izumacha.expensetracker.dto.response.CategoryResponse;
 import com.izumacha.expensetracker.dto.response.PageResponse;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
+// 未存在例外を参照する
+import com.izumacha.expensetracker.exception.NotFoundException;
 // カテゴリリポジトリを参照する
 import com.izumacha.expensetracker.repository.CategoryRepository;
 
 // 一覧の戻り型
 import java.util.List;
+// 取得結果が無いかもしれないことを表す型
+import java.util.Optional;
 
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
@@ -139,6 +143,33 @@ class CategoryServiceTest {
         assertThatThrownBy(() -> categoryService.create(request))
                 // 例外型が DuplicateException であることを確認する
                 .isInstanceOf(DuplicateException.class);
+    }
+
+    // findById: 存在する ID なら DTO を返すことを検証する
+    @Test
+    void findById_存在すればDTOを返す() {
+        // 主キー 1 の検索で採番済みカテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(category(1L, "食費")));
+
+        // テスト対象の findById を呼び出す
+        CategoryResponse response = categoryService.findById(1L);
+
+        // 返却 DTO の ID が一致することを検証する
+        assertThat(response.id()).isEqualTo(1L);
+        // 返却 DTO の名前が一致することを検証する
+        assertThat(response.name()).isEqualTo("食費");
+    }
+
+    // findById: 存在しない ID なら NotFoundException（404 相当）になることを検証する
+    @Test
+    void findById_不在なら404例外() {
+        // 主キー 404 の検索で空（未存在）を返すようモックする
+        when(categoryRepository.findById(404L)).thenReturn(Optional.empty());
+
+        // findById 呼び出しで NotFoundException が投げられることを検証する
+        assertThatThrownBy(() -> categoryService.findById(404L))
+                // 例外型が NotFoundException であることを確認する
+                .isInstanceOf(NotFoundException.class);
     }
 
     // findAll: 全カテゴリが DTO のページに変換されることを検証する
