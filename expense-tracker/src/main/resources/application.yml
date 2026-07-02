@@ -49,6 +49,18 @@ spring:
       max-file-size: 1MB
       # リクエスト全体の最大サイズ
       max-request-size: 1MB
+  # MVC（DispatcherServlet）の設定
+  mvc:
+    # ハンドラが見つからない場合に既定の BasicErrorController に委譲せず
+    # NoHandlerFoundException を投げさせる（GlobalExceptionHandler で {status, message} に統一するため）
+    throw-exception-if-no-handler-found: true
+  web:
+    # 静的リソース配信の設定
+    resources:
+      # 静的リソース用のハンドラマッピングを無効化する（API 専用アプリのため）。
+      # これを true のままにすると "/**" が静的リソースハンドラに奪われ、
+      # throw-exception-if-no-handler-found が効かず NoHandlerFoundException が飛ばない
+      add-mappings: false
 
 # サーバの設定
 server:

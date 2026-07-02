@@ -30,6 +30,9 @@ public final class ErrorMessages {
     // ステータスを問わず誤誘導しないよう「形式」に限定しない中立な表現にする
     public static final String BAD_REQUEST = "リクエストが正しくありません";
 
+    // 未定義パス（存在しない URL）へのリクエスト時の安全な文言（内部のルーティング情報は含めない）
+    public static final String PATH_NOT_FOUND = "指定されたパスは存在しません";
+
     // 入力検証で個別のフィールドエラーが取得できなかった場合の汎用文言（§6 一元管理）
     public static final String VALIDATION_ERROR = "入力値が正しくありません";
 

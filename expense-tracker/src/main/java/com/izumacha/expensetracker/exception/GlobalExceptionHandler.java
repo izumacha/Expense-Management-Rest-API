@@ -27,6 +27,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 // パス変数・クエリの型変換失敗時の例外
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+// 未定義パス（ハンドラ未検出）時の例外
+import org.springframework.web.servlet.NoHandlerFoundException;
 // Spring 標準 MVC 例外を一括処理する基底クラス
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
@@ -154,6 +156,25 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(status)
                 // 本体にステータスと安全なメッセージを格納する
                 .body(new ErrorResponse(status.value(), message));
+    }
+
+    // 未定義パス（例：存在しないURLへのアクセス）を404として {status, message} 契約に統一するハンドラ。
+    // application.yml の throw-exception-if-no-handler-found / add-mappings:false と対で、
+    // Spring Boot 既定の BasicErrorController（{timestamp,status,error,path} 形式）へ委譲させない。
+    @Override
+    protected ResponseEntity<Object> handleNoHandlerFoundException(
+            // 発生したハンドラ未検出例外
+            NoHandlerFoundException ex,
+            // レスポンスヘッダ
+            HttpHeaders headers,
+            // 基底クラスが決めたステータス（404）
+            HttpStatusCode status,
+            // リクエスト情報
+            WebRequest request) {
+        // 404 のエラーレスポンスを返す
+        return ResponseEntity.status(status)
+                // 本体にステータスと安全なメッセージ（内部のルーティング詳細は含めない）を格納する
+                .body(new ErrorResponse(status.value(), ErrorMessages.PATH_NOT_FOUND));
     }
 
     // 上記以外の Spring 標準 MVC 例外（不正 JSON・未対応メソッド・未対応メディアタイプ等）の本体を統一整形する
