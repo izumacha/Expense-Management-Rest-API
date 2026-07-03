@@ -146,6 +146,7 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 |--------|------|----------|
 | POST   | `/api/categories` | カテゴリを作る |
 | GET    | `/api/categories` | カテゴリの一覧を見る（ページ単位。下記参照） |
+| GET    | `/api/categories/{id}` | 1件のカテゴリの詳細を見る |
 
 ### 支出
 
@@ -440,6 +441,7 @@ Replace `{id}` with an actual number (e.g. `1`).
 |--------|------|--------------|
 | POST   | `/api/categories` | Create a category |
 | GET    | `/api/categories` | List categories (paginated; see below) |
+| GET    | `/api/categories/{id}` | View one category in detail |
 
 ### Expenses
 
