@@ -52,6 +52,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/expenses")
 public class ExpenseController {
 
+    // 支出一覧の並び順。並び替えはリポジトリの JPQL 側 ORDER BY（spentOn 降順→id 降順）に委ねるため、
+    // ここでは「並び順なし」を表すセンチネルとして Sort.unsorted() を固定で使う。
+    // クライアント由来の sort を無視する意図を CategoryController と揃えて定数で明示する（§6 一貫性）。
+    private static final Sort EXPENSE_LIST_SORT = Sort.unsorted();
+
     // 支出サービスへの参照
     private final ExpenseService expenseService;
 
@@ -81,7 +86,7 @@ public class ExpenseController {
             @PageableDefault(size = 20) Pageable pageable) {
         // クライアント由来の sort クエリパラメータは無視し、並び順はリポジトリの JPQL 側 ORDER BY
         // （spentOn 降順→id 降順）に固定する。未検証の並び順が下位クエリへ届くのを Web 境界で防ぐ（§9）。
-        Pageable sanitized = PageableSanitizer.withFixedSort(pageable, Sort.unsorted());
+        Pageable sanitized = PageableSanitizer.withFixedSort(pageable, EXPENSE_LIST_SORT);
         // サービスで条件に合う支出をページ単位で取得して返す
         return expenseService.search(month, categoryId, sanitized);
     }

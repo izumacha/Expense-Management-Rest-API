@@ -27,6 +27,12 @@ public final class PageableSanitizer {
     // サーバ側で定めた安全な並び順（fixedSort）に固定した Pageable を返す。
     // fixedSort に Sort.unsorted() を渡した場合は、並び順を下位（リポジトリの JPQL 側 ORDER BY）に委ねる。
     public static Pageable withFixedSort(Pageable pageable, Sort fixedSort) {
+        // ページ指定なし（unpaged）の Pageable に getPageNumber()/getPageSize() を呼ぶと例外になるため、
+        // ページングせず並び順だけ固定した Pageable を返す（公開ユーティリティとしての防御。§9 fail-safe）
+        if (pageable.isUnpaged()) {
+            // ページングは行わず、サーバ指定の安全な並び順だけを適用した unpaged な Pageable を返す
+            return Pageable.unpaged(fixedSort);
+        }
         // ページ番号・件数はクライアント指定を尊重し、並び順だけをサーバ指定の安全な値へ差し替える
         return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), fixedSort);
     }
