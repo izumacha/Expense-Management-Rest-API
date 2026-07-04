@@ -9,12 +9,16 @@ import com.izumacha.expensetracker.dto.response.CategoryResponse;
 import com.izumacha.expensetracker.dto.response.PageResponse;
 // カテゴリサービスを参照する
 import com.izumacha.expensetracker.service.CategoryService;
+// クライアント由来の並び順（sort）を無害化する共通ユーティリティを参照する
+import com.izumacha.expensetracker.web.PageableSanitizer;
 // リクエストボディの検証を有効化するアノテーション
 import jakarta.validation.Valid;
 // 作成したリソースの URI を組み立てる型
 import java.net.URI;
 // ページ指定（ページ番号・件数）を表す型
 import org.springframework.data.domain.Pageable;
+// 並び順（どの列で昇順/降順に並べるか）を表す型
+import org.springframework.data.domain.Sort;
 // 一覧取得時の既定ページサイズを指定するアノテーション
 import org.springframework.data.web.PageableDefault;
 // HTTP レスポンス全体を表すクラス
@@ -37,6 +41,10 @@ import org.springframework.web.bind.annotation.RestController;
 // 共通のベースパスを設定する
 @RequestMapping("/api/categories")
 public class CategoryController {
+
+    // カテゴリ一覧の並び順（id 昇順）。クライアント由来の sort を無視して常にこの順に固定する。
+    // ページング時に安定した並び順を保証し、ページをまたいだ行の重複・欠落を防ぐ（§8 一覧の決定性）。
+    private static final Sort CATEGORY_LIST_SORT = Sort.by(Sort.Direction.ASC, "id");
 
     // カテゴリサービスへの参照
     private final CategoryService categoryService;
@@ -70,7 +78,10 @@ public class CategoryController {
     public PageResponse<CategoryResponse> list(
             // ページ指定（page / size。size 未指定時は既定 20。上限は application.yml で制限）
             @PageableDefault(size = 20) Pageable pageable) {
+        // クライアント由来の sort クエリパラメータは無視し、id 昇順に固定する。
+        // 未検証の並び順が下位クエリへ届くのを Web 境界で防ぎ（§9）、ページングの決定性を担保する（§8）。
+        Pageable sanitized = PageableSanitizer.withFixedSort(pageable, CATEGORY_LIST_SORT);
         // サービスでカテゴリをページ単位で取得して返す
-        return categoryService.findAll(pageable);
+        return categoryService.findAll(sanitized);
     }
 }

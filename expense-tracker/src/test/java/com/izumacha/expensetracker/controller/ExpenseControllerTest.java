@@ -23,6 +23,10 @@ import java.util.List;
 
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
+// サービスへ渡る引数（Pageable）を捕捉するためのキャプチャ
+import org.mockito.ArgumentCaptor;
+// ページ指定（ページ番号・件数・並び順）を表す型
+import org.springframework.data.domain.Pageable;
 // MockMvc の自動設定（フィルタの有効・無効を制御する）アノテーション
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 // Web スライステストを有効化するアノテーション
@@ -40,8 +44,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 // 戻り値を設定する when を取り込む（Mockito）
 import static org.mockito.Mockito.when;
+// モックへの呼び出しを検証する verify を取り込む（Mockito）
+import static org.mockito.Mockito.verify;
 // 例外送出を設定する doThrow を取り込む（Mockito）
 import static org.mockito.Mockito.doThrow;
+// 値を検証する assertThat を取り込む（AssertJ）
+import static org.assertj.core.api.Assertions.assertThat;
 // POST リクエストを組み立てる post を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 // GET リクエストを組み立てる get を取り込む
@@ -176,6 +184,34 @@ class ExpenseControllerTest {
                 .andExpect(jsonPath("$.content").exists())
                 // 全件数が 0 であることを検証する
                 .andExpect(jsonPath("$.totalElements").value(0));
+    }
+
+    // GET: クライアントが sort クエリを付けても無視され、サービスへは並び順なし（クエリ側 ORDER BY 任せ）の
+    // Pageable が渡ることを検証する。未検証の並び順が下位クエリへ届いて 500 を招くのを防ぐ（§9）。
+    @Test
+    void 支出一覧_sortクエリは無視されページ番号と件数だけが引き継がれる() throws Exception {
+        // サービスが空のページを返すようモックする
+        when(expenseService.search(any(), any(), any()))
+                // 2 ページ目・サイズ 5 の空ページを返す（ページ指定が引き継がれることを見るため）
+                .thenReturn(new PageResponse<>(List.of(), 1, 5, 0, 0));
+
+        // 存在しない列を含む sort を付けて一覧を GET する（無視されるので 200 で返るはず）
+        mockMvc.perform(get("/api/expenses").param("sort", "amount,desc").param("page", "1").param("size", "5"))
+                // ステータスが 200 であることを検証する
+                .andExpect(status().isOk());
+
+        // サービスへ渡された Pageable を捕捉するキャプチャを用意する
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        // search 呼び出しの Pageable 引数を捕捉する（month / categoryId は任意一致）
+        verify(expenseService).search(any(), any(), pageableCaptor.capture());
+        // 捕捉した Pageable を取り出す
+        Pageable passed = pageableCaptor.getValue();
+        // 並び順は無指定（クライアントの sort が捨てられている）であることを検証する
+        assertThat(passed.getSort().isSorted()).isFalse();
+        // ページ番号はクライアント指定（2 ページ目＝index 1）が引き継がれることを検証する
+        assertThat(passed.getPageNumber()).isEqualTo(1);
+        // 件数もクライアント指定（5 件）が引き継がれることを検証する
+        assertThat(passed.getPageSize()).isEqualTo(5);
     }
 
     // GET /summary: month 指定で 200 と集計が返ることを検証する
