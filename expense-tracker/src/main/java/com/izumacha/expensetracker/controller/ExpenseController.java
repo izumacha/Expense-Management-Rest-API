@@ -13,12 +13,16 @@ import com.izumacha.expensetracker.dto.response.PageResponse;
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
 // 支出サービスを参照する
 import com.izumacha.expensetracker.service.ExpenseService;
+// クライアント由来の並び順（sort）を無害化する共通ユーティリティを参照する
+import com.izumacha.expensetracker.web.PageableSanitizer;
 // リクエストボディの検証を有効化するアノテーション
 import jakarta.validation.Valid;
 // 作成したリソースの URI を組み立てる型
 import java.net.URI;
 // ページ指定（ページ番号・件数）を表す型
 import org.springframework.data.domain.Pageable;
+// 並び順（どの列で昇順/降順に並べるか）を表す型
+import org.springframework.data.domain.Sort;
 // 一覧取得時の既定ページサイズを指定するアノテーション
 import org.springframework.data.web.PageableDefault;
 // HTTP レスポンス全体を表すクラス
@@ -75,8 +79,11 @@ public class ExpenseController {
             @RequestParam(value = "categoryId", required = false) Long categoryId,
             // ページ指定（page / size。size 未指定時は既定 20。上限は application.yml で制限）
             @PageableDefault(size = 20) Pageable pageable) {
+        // クライアント由来の sort クエリパラメータは無視し、並び順はリポジトリの JPQL 側 ORDER BY
+        // （spentOn 降順→id 降順）に固定する。未検証の並び順が下位クエリへ届くのを Web 境界で防ぐ（§9）。
+        Pageable sanitized = PageableSanitizer.withFixedSort(pageable, Sort.unsorted());
         // サービスで条件に合う支出をページ単位で取得して返す
-        return expenseService.search(month, categoryId, pageable);
+        return expenseService.search(month, categoryId, sanitized);
     }
 
     // 月次集計を取得する（成功時 200）。一覧より先に固定パスを定義する

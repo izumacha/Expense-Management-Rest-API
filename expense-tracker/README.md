@@ -168,6 +168,8 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 
 返り値は `content`（要素の配列）に加え、`page` / `size` / `totalElements`（全件数）/ `totalPages`（全ページ数）を含みます。
 
+> 並び順はサーバー側で固定しています（支出は支出日の新しい順、カテゴリは登録順）。`sort` クエリパラメータには対応しておらず、指定しても無視されます。
+
 #### 支出一覧の絞り込み
 
 `GET /api/expenses` は、条件を付けて絞り込めます（どちらも省略可能）。
@@ -462,6 +464,8 @@ The list endpoints (`GET /api/expenses`, `GET /api/categories`) cap how many ite
 - `size=20` … items per page (defaults to 20; max 100)
 
 Besides `content` (the array of items), the response includes `page` / `size` / `totalElements` / `totalPages`.
+
+> Ordering is fixed on the server side (expenses by most recent date, categories by creation order). The `sort` query parameter is not supported and is ignored if provided.
 
 #### Filtering the expense list
 

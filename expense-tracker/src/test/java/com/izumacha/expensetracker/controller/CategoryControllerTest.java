@@ -17,6 +17,12 @@ import java.util.List;
 
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
+// サービスへ渡る引数（Pageable）を捕捉するためのキャプチャ
+import org.mockito.ArgumentCaptor;
+// ページ指定（ページ番号・件数・並び順）を表す型
+import org.springframework.data.domain.Pageable;
+// 並び順（どの列で昇順/降順に並べるか）を表す型
+import org.springframework.data.domain.Sort;
 // MockMvc の自動設定（フィルタの有効・無効を制御する）アノテーション
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 // Web スライステストを有効化するアノテーション
@@ -32,6 +38,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.mockito.ArgumentMatchers.any;
 // 戻り値を設定する when を取り込む（Mockito）
 import static org.mockito.Mockito.when;
+// モックへの呼び出しを検証する verify を取り込む（Mockito）
+import static org.mockito.Mockito.verify;
+// 値を検証する assertThat を取り込む（AssertJ）
+import static org.assertj.core.api.Assertions.assertThat;
 // POST リクエストを組み立てる post を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 // GET リクエストを組み立てる get を取り込む
@@ -151,6 +161,28 @@ class CategoryControllerTest {
                 .andExpect(status().isOk())
                 // 本体 content 先頭の name が食費であることを検証する
                 .andExpect(jsonPath("$.content[0].name").value("食費"));
+    }
+
+    // GET: クライアントが sort クエリを付けても無視され、サービスへは常に id 昇順に固定した Pageable が
+    // 渡ることを検証する。未検証の並び順による 500 を防ぎ（§9）、ページングの決定性を担保する（§8）。
+    @Test
+    void カテゴリ一覧_sortクエリは無視されid昇順に固定される() throws Exception {
+        // サービスが空のページを返すようモックする
+        when(categoryService.findAll(any()))
+                // 0 件・既定サイズ 20 の空ページを返す
+                .thenReturn(new PageResponse<>(List.of(), 0, 20, 0, 0));
+
+        // 別の列の降順を指定する sort を付けて一覧を GET する（無視されるので 200 で返るはず）
+        mockMvc.perform(get("/api/categories").param("sort", "name,desc"))
+                // ステータスが 200 であることを検証する
+                .andExpect(status().isOk());
+
+        // サービスへ渡された Pageable を捕捉するキャプチャを用意する
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        // findAll 呼び出しの Pageable 引数を捕捉する
+        verify(categoryService).findAll(pageableCaptor.capture());
+        // 捕捉した Pageable の並び順が id 昇順に固定されていることを検証する
+        assertThat(pageableCaptor.getValue().getSort()).isEqualTo(Sort.by(Sort.Direction.ASC, "id"));
     }
 
     // GET /{id}: 作成時の Location（/api/categories/{id}）が指すリソースを取得でき、200 と本体を返すことを検証する
