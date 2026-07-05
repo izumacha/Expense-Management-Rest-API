@@ -120,6 +120,24 @@ class CategoryControllerTest {
                 .andExpect(jsonPath("$.status").value(400));
     }
 
+    // POST: 全角スペースのみの名前は400になることを検証する。
+    // @NotBlank は ASCII 空白のみを trim() で除去するため、全角スペース（U+3000）だけの値を
+    // 誤って「空白でない」と判定しうる。CreateCategoryRequest の正規コンストラクタで
+    // strip()（Unicode 対応）してから検証することで、この誤判定を防いでいることを確認する。
+    @Test
+    void カテゴリ作成_全角スペースのみの名前は400() throws Exception {
+        // 全角スペース（U+3000）1文字のみの名前で POST する
+        mockMvc.perform(post("/api/categories")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 全角スペースのみの名前を持つ本体を渡す
+                        .content("{\"name\":\"　\"}"))
+                // ステータスが 400 であることを検証する
+                .andExpect(status().isBadRequest())
+                // 本体の status フィールドが 400 であることを検証する
+                .andExpect(jsonPath("$.status").value(400));
+    }
+
     // POST: 名前が 50 文字超なら検証で 400 になることを検証する
     @Test
     void カテゴリ作成_長すぎる名前は400() throws Exception {
@@ -264,6 +282,22 @@ class CategoryControllerTest {
                         .content("""
                                 {"name":""}
                                 """))
+                // ステータスが 400 であることを検証する
+                .andExpect(status().isBadRequest())
+                // 本体の status フィールドが 400 であることを検証する
+                .andExpect(jsonPath("$.status").value(400));
+    }
+
+    // PUT: 全角スペースのみの名前は400になることを検証する（更新経路でも Unicode 対応の正規化後に
+    // @NotBlank が効くことを確認。理由は POST 側のテストと同じ）
+    @Test
+    void カテゴリ更新_全角スペースのみの名前は400() throws Exception {
+        // 全角スペース（U+3000）1文字のみの名前で PUT する
+        mockMvc.perform(put("/api/categories/1")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 全角スペースのみの名前を持つ本体を渡す
+                        .content("{\"name\":\"　\"}"))
                 // ステータスが 400 であることを検証する
                 .andExpect(status().isBadRequest())
                 // 本体の status フィールドが 400 であることを検証する
