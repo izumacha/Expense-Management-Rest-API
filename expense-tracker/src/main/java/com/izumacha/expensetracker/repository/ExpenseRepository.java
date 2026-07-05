@@ -67,6 +67,9 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
             """)
     Optional<Expense> findByIdWithCategory(@Param("id") Long id);
 
+    // 指定カテゴリを参照する支出が1件でも存在するか判定する（カテゴリ削除時の使用中チェック用）
+    boolean existsByCategoryId(Long categoryId);
+
     // 月次のカテゴリ別合計を GROUP BY で集計するクエリ
     @Query("""
             SELECT new com.izumacha.expensetracker.dto.response.CategorySummary(

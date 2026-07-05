@@ -3,6 +3,8 @@ package com.izumacha.expensetracker.controller;
 
 // カテゴリ作成リクエスト DTO を参照する
 import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
+// カテゴリ更新リクエスト DTO を参照する（作成と更新の API 契約を分離する）
+import com.izumacha.expensetracker.dto.request.UpdateCategoryRequest;
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
 // ページ形式の返却 DTO を参照する
@@ -23,12 +25,16 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 // HTTP レスポンス全体を表すクラス
 import org.springframework.http.ResponseEntity;
+// DELETE マッピング用アノテーション
+import org.springframework.web.bind.annotation.DeleteMapping;
 // GET マッピング用アノテーション
 import org.springframework.web.bind.annotation.GetMapping;
 // パス変数（URL 中の {id} など）を取得するアノテーション
 import org.springframework.web.bind.annotation.PathVariable;
 // POST マッピング用アノテーション
 import org.springframework.web.bind.annotation.PostMapping;
+// PUT マッピング用アノテーション
+import org.springframework.web.bind.annotation.PutMapping;
 // リクエストボディ取得用アノテーション
 import org.springframework.web.bind.annotation.RequestBody;
 // 共通パスを宣言するアノテーション
@@ -83,5 +89,25 @@ public class CategoryController {
         Pageable sanitized = PageableSanitizer.withFixedSort(pageable, CATEGORY_LIST_SORT);
         // サービスでカテゴリをページ単位で取得して返す
         return categoryService.findAll(sanitized);
+    }
+
+    // カテゴリ名を更新する（成功時 200）
+    @PutMapping("/{id}")
+    public CategoryResponse update(
+            // 更新対象のカテゴリ ID
+            @PathVariable("id") Long id,
+            // 更新内容（検証付き。UpdateCategoryRequest で作成との API 契約を明示分離）
+            @Valid @RequestBody UpdateCategoryRequest request) {
+        // サービスでカテゴリを更新して返す
+        return categoryService.update(id, request);
+    }
+
+    // カテゴリを削除する（成功時 204。支出から参照中の場合はサービスが409相当の例外を送出する）
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable("id") Long id) {
+        // サービスでカテゴリを削除する
+        categoryService.delete(id);
+        // 204 No Content を返す
+        return ResponseEntity.noContent().build();
     }
 }

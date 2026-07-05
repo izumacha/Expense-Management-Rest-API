@@ -5,16 +5,22 @@ package com.izumacha.expensetracker.service;
 import com.izumacha.expensetracker.domain.Category;
 // カテゴリ作成リクエスト DTO を参照する
 import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
+// カテゴリ更新リクエスト DTO を参照する
+import com.izumacha.expensetracker.dto.request.UpdateCategoryRequest;
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
 // ページ形式の返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.PageResponse;
+// 参照中カテゴリの削除禁止例外を参照する
+import com.izumacha.expensetracker.exception.CategoryInUseException;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
 // 未存在例外を参照する
 import com.izumacha.expensetracker.exception.NotFoundException;
 // カテゴリリポジトリを参照する
 import com.izumacha.expensetracker.repository.CategoryRepository;
+// 支出リポジトリを参照する（削除時の使用中チェックのモックに使う）
+import com.izumacha.expensetracker.repository.ExpenseRepository;
 
 // 一覧の戻り型
 import java.util.List;
@@ -50,6 +56,8 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 // 呼び出されなかったことを検証する never を取り込む（Mockito）
 import static org.mockito.Mockito.never;
+// void メソッドが例外を投げるようスタブする doThrow を取り込む（Mockito）
+import static org.mockito.Mockito.doThrow;
 
 // CategoryService をモック依存だけでテストする（DB には接続しない）
 @ExtendWith(MockitoExtension.class)
@@ -58,6 +66,10 @@ class CategoryServiceTest {
     // カテゴリリポジトリのモック
     @Mock
     private CategoryRepository categoryRepository;
+
+    // 支出リポジトリのモック（削除時の使用中チェックで使う）
+    @Mock
+    private ExpenseRepository expenseRepository;
 
     // 上記モックを注入したテスト対象のサービス
     @InjectMocks
@@ -170,6 +182,176 @@ class CategoryServiceTest {
         assertThatThrownBy(() -> categoryService.findById(404L))
                 // 例外型が NotFoundException であることを確認する
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    // update: 重複なしなら名前を更新して保存し DTO を返すことを検証する
+    @Test
+    void update_重複なしなら更新して返す() {
+        // 更新前のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 更新リクエスト（交通費への変更）を用意する
+        UpdateCategoryRequest request = new UpdateCategoryRequest("交通費");
+        // 主キー 1 の検索で更新前カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 自分以外に同名が無い（重複なし）を返すようモックする
+        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(false);
+        // 保存時（即時反映）は引数のエンティティをそのまま返すようモックする
+        when(categoryRepository.saveAndFlush(any(Category.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // テスト対象の update を呼び出す
+        CategoryResponse response = categoryService.update(1L, request);
+
+        // 返却 DTO の名前が更新後の値であることを検証する
+        assertThat(response.name()).isEqualTo("交通費");
+    }
+
+    // update: 前後に空白を含む名前は正規化してから重複チェック・保存されることを検証する
+    @Test
+    void update_前後の空白は正規化してから重複チェックする() {
+        // 更新前のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 前後に空白を含む更新リクエスト（" 交通費 "）を用意する
+        UpdateCategoryRequest request = new UpdateCategoryRequest(" 交通費 ");
+        // 主キー 1 の検索で更新前カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 正規化後の名前（"交通費"）で重複なしを返すようモックする
+        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(false);
+        // 保存時（即時反映）は引数のエンティティをそのまま返すようモックする
+        when(categoryRepository.saveAndFlush(any(Category.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // テスト対象の update を呼び出す
+        CategoryResponse response = categoryService.update(1L, request);
+
+        // 返却 DTO の名前が正規化済み（空白なし）であることを検証する
+        assertThat(response.name()).isEqualTo("交通費");
+        // 前後空白付きの生の値では重複チェックを呼んでいないことを検証する
+        verify(categoryRepository, never()).existsByNameAndIdNot(" 交通費 ", 1L);
+    }
+
+    // update: 存在しない ID なら NotFoundException（404 相当）になることを検証する
+    @Test
+    void update_不在なら404例外() {
+        // 主キー 404 の検索で空（未存在）を返すようモックする
+        when(categoryRepository.findById(404L)).thenReturn(Optional.empty());
+
+        // update 呼び出しで NotFoundException が投げられることを検証する
+        assertThatThrownBy(() -> categoryService.update(404L, new UpdateCategoryRequest("交通費")))
+                // 例外型が NotFoundException であることを確認する
+                .isInstanceOf(NotFoundException.class);
+        // 保存が一度も呼ばれていないことを検証する
+        verify(categoryRepository, never()).saveAndFlush(any());
+    }
+
+    // update: 自分以外に同名カテゴリが存在すれば DuplicateException になり保存されないことを検証する
+    @Test
+    void update_自分以外に同名があれば409例外() {
+        // 更新前のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 主キー 1 の検索で更新前カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 自分以外に同名（交通費）が存在する（重複あり）を返すようモックする
+        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(true);
+
+        // update 呼び出しで DuplicateException が投げられることを検証する
+        assertThatThrownBy(() -> categoryService.update(1L, new UpdateCategoryRequest("交通費")))
+                // 例外型が DuplicateException であることを確認する
+                .isInstanceOf(DuplicateException.class);
+        // 保存が一度も呼ばれていないことを検証する
+        verify(categoryRepository, never()).saveAndFlush(any());
+    }
+
+    // update: 事前チェックをすり抜けた同時実行の重複（DB 制約違反）も DuplicateException に変換することを検証する。
+    // saveAndFlush で即時反映させているため、この一意制約違反は update() 自身の try 内で検知できる
+    // （save() のままだと UPDATE がコミット時まで遅延され、この try/catch をすり抜けてしまう）。
+    @Test
+    void update_保存時の制約違反も409例外に変換() {
+        // 更新前のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 主キー 1 の検索で更新前カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 事前チェックは false（すり抜け）を返すようモックする
+        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(false);
+        // 保存時（即時反映）に一意制約違反が起きるようモックする
+        when(categoryRepository.saveAndFlush(any(Category.class)))
+                // DB の一意制約違反例外を投げる
+                .thenThrow(new DataIntegrityViolationException("unique violation"));
+
+        // update 呼び出しで DuplicateException に変換されることを検証する
+        assertThatThrownBy(() -> categoryService.update(1L, new UpdateCategoryRequest("交通費")))
+                // 例外型が DuplicateException であることを確認する
+                .isInstanceOf(DuplicateException.class);
+    }
+
+    // delete: 支出から参照されていなければ削除することを検証する
+    @Test
+    void delete_未参照なら削除する() {
+        // 削除対象のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 主キー 1 の検索で対象カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 支出からの参照が無い（false）を返すようモックする
+        when(expenseRepository.existsByCategoryId(1L)).thenReturn(false);
+
+        // テスト対象の delete を呼び出す
+        categoryService.delete(1L);
+
+        // リポジトリの削除が対象カテゴリで呼ばれたことを検証する
+        verify(categoryRepository).delete(existing);
+    }
+
+    // delete: 存在しない ID なら NotFoundException（404 相当）になることを検証する
+    @Test
+    void delete_不在なら404例外() {
+        // 主キー 404 の検索で空（未存在）を返すようモックする
+        when(categoryRepository.findById(404L)).thenReturn(Optional.empty());
+
+        // delete 呼び出しで NotFoundException が投げられることを検証する
+        assertThatThrownBy(() -> categoryService.delete(404L))
+                // 例外型が NotFoundException であることを確認する
+                .isInstanceOf(NotFoundException.class);
+        // 削除が一度も呼ばれていないことを検証する
+        verify(categoryRepository, never()).delete(any());
+    }
+
+    // delete: 支出から参照されていれば CategoryInUseException（409 相当）になり削除されないことを検証する
+    @Test
+    void delete_支出から参照中なら409例外() {
+        // 削除対象のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 主キー 1 の検索で対象カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 支出からの参照がある（true）を返すようモックする
+        when(expenseRepository.existsByCategoryId(1L)).thenReturn(true);
+
+        // delete 呼び出しで CategoryInUseException が投げられることを検証する
+        assertThatThrownBy(() -> categoryService.delete(1L))
+                // 例外型が CategoryInUseException であることを確認する
+                .isInstanceOf(CategoryInUseException.class);
+        // 削除が一度も呼ばれていないことを検証する
+        verify(categoryRepository, never()).delete(any());
+    }
+
+    // delete: 事前チェックをすり抜けた同時実行の参照（DB の外部キー制約違反）も
+    // CategoryInUseException に変換することを検証する。flush() で即時反映させているため、
+    // この制約違反は delete() 自身の try 内で検知できる
+    // （flush しないままだと DELETE がコミット時まで遅延され、この try/catch をすり抜けてしまう）。
+    @Test
+    void delete_保存時の外部キー制約違反も409例外に変換() {
+        // 削除対象のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 主キー 1 の検索で対象カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 事前チェックは false（すり抜け）を返すようモックする
+        when(expenseRepository.existsByCategoryId(1L)).thenReturn(false);
+        // 即時反映（flush）時に外部キー制約違反が起きるようモックする
+        doThrow(new DataIntegrityViolationException("fk violation"))
+                // 対象のメソッドを指定する
+                .when(categoryRepository).flush();
+
+        // delete 呼び出しで CategoryInUseException に変換されることを検証する
+        assertThatThrownBy(() -> categoryService.delete(1L))
+                // 例外型が CategoryInUseException であることを確認する
+                .isInstanceOf(CategoryInUseException.class);
     }
 
     // findAll: 全カテゴリが DTO のページに変換されることを検証する

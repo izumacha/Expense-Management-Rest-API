@@ -193,4 +193,21 @@ class ExpenseRepositoryTest extends AbstractRepositoryTest {
         // 交通費の合計が 500 であることを検証する
         assertThat(result.get(1).total()).isEqualByComparingTo("500");
     }
+
+    // existsByCategoryId: 支出から参照されているカテゴリなら true を返すことを検証する
+    @Test
+    void existsByCategoryId_参照されていればtrue() {
+        // setUp で食費カテゴリの支出を投入済みのため true であることを検証する
+        assertThat(expenseRepository.existsByCategoryId(food.getId())).isTrue();
+    }
+
+    // existsByCategoryId: どの支出からも参照されていないカテゴリなら false を返すことを検証する
+    @Test
+    void existsByCategoryId_未参照ならfalse() {
+        // setUp とは別に、支出を1件も紐づけていない娯楽費カテゴリを保存する
+        Category entertainment = categoryRepository.save(new Category("娯楽費"));
+
+        // 支出が無いカテゴリの参照判定が false であることを検証する
+        assertThat(expenseRepository.existsByCategoryId(entertainment.getId())).isFalse();
+    }
 }
