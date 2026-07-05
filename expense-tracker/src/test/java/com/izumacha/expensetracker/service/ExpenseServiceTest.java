@@ -215,6 +215,17 @@ class ExpenseServiceTest {
                 .isInstanceOf(InvalidRequestException.class);
     }
 
+    // search: 形式は正しいが範囲外（Year 上限を超える翌月初計算）の月も400例外になることを検証する。
+    // "999999999-12" は YearMonth.parse は通るが plusMonths(1) で Year 上限を超えて DateTimeException を投げる。
+    // parseMonth で捕捉できていないと未捕捉例外が catch-all に落ちて500になるため、その回帰を防ぐ。
+    @Test
+    void search_範囲外の月は400例外() {
+        // 範囲外の月で search を呼ぶと InvalidRequestException（400 相当）になることを検証する
+        assertThatThrownBy(() -> expenseService.search("999999999-12", null, PageRequest.of(0, 20)))
+                // 例外型が InvalidRequestException であることを確認する（500 ではない）
+                .isInstanceOf(InvalidRequestException.class);
+    }
+
     // findById: 存在しない ID は NotFoundException になることを検証する
     @Test
     void findById_不在時は404例外() {
@@ -363,6 +374,16 @@ class ExpenseServiceTest {
         // 不正な月で summary を呼ぶと例外になることを検証する
         assertThatThrownBy(() -> expenseService.summary("June"))
                 // 例外型が InvalidRequestException であることを確認する
+                .isInstanceOf(InvalidRequestException.class);
+    }
+
+    // summary: 形式は正しいが範囲外（Year 上限を超える翌月初計算）の月も400例外になることを検証する。
+    // search 側と同じく、parseMonth が plusMonths のオーバーフローを捕捉できていないと500に落ちる回帰を防ぐ。
+    @Test
+    void summary_範囲外の月は400例外() {
+        // 範囲外の月で summary を呼ぶと InvalidRequestException（400 相当）になることを検証する
+        assertThatThrownBy(() -> expenseService.summary("999999999-12"))
+                // 例外型が InvalidRequestException であることを確認する（500 ではない）
                 .isInstanceOf(InvalidRequestException.class);
     }
 }
