@@ -79,6 +79,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(new ErrorResponse(HttpStatus.CONFLICT.value(), ex.getMessage()));
     }
 
+    // 参照中カテゴリの削除禁止（409）を処理するハンドラ
+    @ExceptionHandler(CategoryInUseException.class)
+    public ResponseEntity<ErrorResponse> handleCategoryInUse(CategoryInUseException ex) {
+        // 409 のエラーレスポンスを返す
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                // 本体にステータスと例外メッセージを格納する
+                .body(new ErrorResponse(HttpStatus.CONFLICT.value(), ex.getMessage()));
+    }
+
     // パス変数・クエリの型不一致（例：GET /api/expenses/abc）を400として処理するハンドラ
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {

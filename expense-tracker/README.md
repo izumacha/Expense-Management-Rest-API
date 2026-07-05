@@ -147,6 +147,8 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 | POST   | `/api/categories` | カテゴリを作る |
 | GET    | `/api/categories` | カテゴリの一覧を見る（ページ単位。下記参照） |
 | GET    | `/api/categories/{id}` | 1件のカテゴリの詳細を見る |
+| PUT    | `/api/categories/{id}` | カテゴリ名を更新する |
+| DELETE | `/api/categories/{id}` | カテゴリを削除する（支出から参照中の場合は409） |
 
 ### 支出
 
@@ -444,6 +446,8 @@ Replace `{id}` with an actual number (e.g. `1`).
 | POST   | `/api/categories` | Create a category |
 | GET    | `/api/categories` | List categories (paginated; see below) |
 | GET    | `/api/categories/{id}` | View one category in detail |
+| PUT    | `/api/categories/{id}` | Update a category's name |
+| DELETE | `/api/categories/{id}` | Delete a category (409 if referenced by an expense) |
 
 ### Expenses
 

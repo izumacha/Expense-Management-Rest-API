@@ -17,6 +17,9 @@ public final class ErrorMessages {
     // 同名カテゴリが既に存在するときの安全な文言（入力値は含めない）
     public static final String CATEGORY_NAME_DUPLICATE = "指定された名前のカテゴリは既に存在します";
 
+    // 支出から参照中のカテゴリを削除しようとしたときの安全な文言（内部 ID は含めない）
+    public static final String CATEGORY_IN_USE = "このカテゴリは支出で使用されているため削除できません";
+
     // 月の形式が不正なときの安全な文言（生の入力値は含めない）
     public static final String INVALID_MONTH_FORMAT = "月の形式が正しくありません（YYYY-MM 形式で指定してください）";
 

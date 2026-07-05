@@ -11,4 +11,7 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
 
     // 同名カテゴリが存在するか判定する（重複チェック用）
     boolean existsByName(String name);
+
+    // 指定 ID 以外に同名カテゴリが存在するか判定する（更新時の重複チェック用。自分自身は対象から除く）
+    boolean existsByNameAndIdNot(String name, Long id);
 }
