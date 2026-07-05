@@ -29,12 +29,12 @@ import com.izumacha.expensetracker.repository.CategoryRepository;
 import com.izumacha.expensetracker.repository.ExpenseRepository;
 // 合計初期値に使う10進数型
 import java.math.BigDecimal;
+// 日付・時刻計算の失敗を表す親例外（形式不正の DateTimeParseException も範囲外の年月計算もこの型で捕捉できる）
+import java.time.DateTimeException;
 // 日付型
 import java.time.LocalDate;
 // 月（年月）を表す型
 import java.time.YearMonth;
-// 月のパース失敗を検出する例外
-import java.time.format.DateTimeParseException;
 // 一覧の戻り型
 import java.util.List;
 // ページ単位の取得結果を表す型
@@ -188,12 +188,21 @@ public class ExpenseService {
 
     // YYYY-MM 形式の文字列を YearMonth に変換する
     private YearMonth parseMonth(String month) {
-        // 不正な形式は400として扱うため変換失敗を捕捉する
+        // 不正な形式・範囲外の月はいずれも400として扱うため、パースと期間計算の失敗を1箇所で捕捉する
         try {
             // 文字列を年月としてパースする
-            return YearMonth.parse(month);
-        } catch (DateTimeParseException e) {
-            // 生の入力値を外部に返さない安全な文言へ変換し、原因例外は追跡用に連鎖させる（外部公開して安全な400例外）
+            YearMonth target = YearMonth.parse(month);
+            // 呼び出し側（search / summary）が行う「翌月初」計算をここでも先に実行して検証する。
+            // 例えば "999999999-12" は YearMonth.parse は通るが、plusMonths で Year の上限
+            // （999999999）を超えて DateTimeException を投げる。ここで弾かないと、その例外が
+            // parseMonth の外（呼び出し側）で未捕捉のまま catch-all に落ち 500 になってしまう。
+            target.plusMonths(1).atDay(1);
+            // 検証を通過した年月を返す
+            return target;
+        } catch (DateTimeException e) {
+            // 形式不正（DateTimeParseException）と範囲外（plusMonths のオーバーフロー）の両方を
+            // 包含する親例外を捕捉する。生の入力値を外部に返さない安全な文言へ変換し、
+            // 原因例外は追跡用に連鎖させる（外部公開して安全な400例外）
             throw new InvalidRequestException(ErrorMessages.INVALID_MONTH_FORMAT, e);
         }
     }
