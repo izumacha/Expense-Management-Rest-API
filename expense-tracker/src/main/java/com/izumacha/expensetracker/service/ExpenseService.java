@@ -37,6 +37,8 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 // 一覧の戻り型
 import java.util.List;
+// DB 制約違反（外部キー違反など）を表す例外。同時実行でカテゴリが消えた場合の保存失敗を捕捉する
+import org.springframework.dao.DataIntegrityViolationException;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
 // ページ指定（ページ番号・件数）を表す型
@@ -72,10 +74,8 @@ public class ExpenseService {
         Expense expense = new Expense();
         // リクエスト内容をエンティティへ反映する
         applyFields(expense, request.amount(), request.description(), request.spentOn(), category);
-        // 保存して採番済みのインスタンスを取得する
-        Expense saved = expenseRepository.save(expense);
-        // 保存結果を DTO に変換して返す
-        return ExpenseResponse.from(saved);
+        // 事前チェック後に別リクエストがカテゴリを削除したレースは外部キー違反として捕捉する
+        return saveOrThrowIfCategoryVanished(expense);
     }
 
     // 月とカテゴリ（いずれも任意）で支出一覧をページ単位で取得する
@@ -111,10 +111,8 @@ public class ExpenseService {
         Category category = findCategoryOrThrow(request.categoryId());
         // リクエスト内容をエンティティへ反映する
         applyFields(expense, request.amount(), request.description(), request.spentOn(), category);
-        // 変更を保存する
-        Expense saved = expenseRepository.save(expense);
-        // 保存結果を DTO に変換して返す
-        return ExpenseResponse.from(saved);
+        // 事前チェック後に別リクエストがカテゴリを削除したレースは外部キー違反として捕捉する
+        return saveOrThrowIfCategoryVanished(expense);
     }
 
     // 支出を削除する
@@ -160,6 +158,22 @@ public class ExpenseService {
         expense.setDescription(description);
         // 支出日を設定する
         expense.setSpentOn(spentOn);
+    }
+
+    // 支出を保存し、保存時の外部キー違反（カテゴリ消失レース）は404例外へ変換する（create/update 共通）
+    private ExpenseResponse saveOrThrowIfCategoryVanished(Expense expense) {
+        // 事前の存在チェックをすり抜けた同時実行の削除は保存時に一意/外部キー制約違反となる
+        try {
+            // 保存して採番済み（更新時は更新後）のインスタンスを取得する
+            Expense saved = expenseRepository.save(expense);
+            // 保存結果を DTO に変換して返す
+            return ExpenseResponse.from(saved);
+        } catch (DataIntegrityViolationException e) {
+            // Expense の外部キーは category_id のみで、amount/spentOn は事前に @NotNull 検証済み。
+            // よってこの時点の制約違反は「参照先カテゴリが消えた」ことを意味し、500 ではなく 404 を返す。
+            // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
+            throw new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e);
+        }
     }
 
     // カテゴリを取得し、無ければ404例外を投げる
