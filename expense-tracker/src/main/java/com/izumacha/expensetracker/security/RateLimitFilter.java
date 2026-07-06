@@ -33,6 +33,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.annotation.Value;
 // Bean の優先順位（フィルタの適用順）を指定するアノテーション
 import org.springframework.core.annotation.Order;
+// 「最優先」を表す定数 Ordered.HIGHEST_PRECEDENCE を参照する
+import org.springframework.core.Ordered;
 // HTTP ステータスを表す列挙
 import org.springframework.http.HttpStatus;
 // Spring に管理させるためのコンポーネント宣言
@@ -43,8 +45,14 @@ import org.springframework.web.filter.OncePerRequestFilter;
 // 送信元 IP ごとに固定ウィンドウでリクエスト数を制限する簡易レート制限フィルタ（§9 公開エンドポイントを保護する）。
 // 外部ライブラリを足さず、メモリ使用も上限を設けて DoS（リソース枯渇）の起点を抑える。
 @Component
-// 認証より手前で先に流量を絞る（無認証の大量アクセスでも認証処理に到達させない）
-@Order(1)
+// 認証より手前で先に流量を絞る（無認証の大量アクセスでも認証処理に到達させない）。
+// Spring Boot は Spring Security のフィルタチェーンを既定で order = -100（SecurityProperties.Filter の既定値）
+// で登録するため、以前の @Order(1) では 1 > -100 となり、実際には Security のフィルタチェーンより
+// 「後」に実行されていた（意図と逆）。フィルタは order の昇順に実行されるため、Security より確実に先に
+// 実行させるには、指定可能な最小値である Ordered.HIGHEST_PRECEDENCE を使う必要がある。
+// 現状は permitAll() のため実害は小さいが、将来 JWT/OAuth2 等の実認証を追加した際に、認証処理（コスト有り）
+// より後にしかレート制限がかからず、無認証の大量アクセスから認証処理を守れなくなる（§9 の設計意図を満たせない）。
+@Order(Ordered.HIGHEST_PRECEDENCE)
 public class RateLimitFilter extends OncePerRequestFilter {
 
     // このクラスのログ出力に使うロガー
