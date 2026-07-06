@@ -15,6 +15,8 @@ import com.izumacha.expensetracker.dto.response.CategorySummary;
 import com.izumacha.expensetracker.dto.response.ExpenseResponse;
 // 月次集計返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
+// 外部向けエラーメッセージ定数を参照する
+import com.izumacha.expensetracker.exception.ErrorMessages;
 // クライアント起因の不正リクエスト例外を参照する
 import com.izumacha.expensetracker.exception.InvalidRequestException;
 // 未存在例外を参照する
@@ -32,6 +34,8 @@ import java.time.LocalDate;
 import java.util.List;
 // 値が無いことを表す Optional 型
 import java.util.Optional;
+// DB 制約違反例外（保存時のカテゴリ消失レースを模擬するために使う）
+import org.springframework.dao.DataIntegrityViolationException;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
 // ページ指定（ページ番号・件数）を生成する型
@@ -162,6 +166,70 @@ class ExpenseServiceTest {
                 .isInstanceOf(NotFoundException.class);
         // 保存が一度も呼ばれていないことを検証する
         verify(expenseRepository, never()).save(any());
+    }
+
+    // create: 存在チェック後にカテゴリが消えて保存が外部キー違反になった場合、500 ではなく 404 に変換されることを検証する
+    @Test
+    void create_保存時の外部キー制約違反は404例外に変換() {
+        // 事前チェック時点では存在するカテゴリ（食費）を用意する
+        Category food = category(1L, "食費");
+        // 作成リクエスト（食費）を用意する
+        CreateExpenseRequest request = new CreateExpenseRequest(
+                // 金額
+                new BigDecimal("1280"),
+                // カテゴリ ID
+                1L,
+                // 説明
+                "ランチ",
+                // 支出日
+                LocalDate.of(2026, 6, 9));
+        // カテゴリ検索は成功する（事前チェックは通過する）ようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(food));
+        // 保存時に別リクエストがカテゴリを削除したレースを模擬して外部キー違反を投げさせる
+        when(expenseRepository.save(any(Expense.class)))
+                // DB の制約違反例外を投げる
+                .thenThrow(new DataIntegrityViolationException("fk violation on category_id"));
+
+        // create 呼び出しが NotFoundException（404 相当）へ変換されることを検証する
+        assertThatThrownBy(() -> expenseService.create(request))
+                // 例外型が NotFoundException であることを確認する（500 ではない）
+                .isInstanceOf(NotFoundException.class)
+                // 安全な日本語文言（カテゴリ未存在）に変換されていることを確認する
+                .hasMessage(ErrorMessages.CATEGORY_NOT_FOUND);
+    }
+
+    // update: 保存が外部キー違反になった場合も 500 ではなく 404 に変換されることを検証する
+    @Test
+    void update_保存時の外部キー制約違反は404例外に変換() {
+        // 交通費カテゴリと既存支出（id=5）を用意する
+        Category transport = category(2L, "交通費");
+        // 既存の支出を用意する
+        Expense existing = expense(5L, transport, "300", LocalDate.of(2026, 6, 1));
+        // 更新リクエストを用意する
+        UpdateExpenseRequest request = new UpdateExpenseRequest(
+                // 新しい金額
+                new BigDecimal("480"),
+                // カテゴリ ID
+                2L,
+                // 説明
+                "バス",
+                // 新しい支出日
+                LocalDate.of(2026, 6, 5));
+        // 対象支出の取得は成功するようモックする
+        when(expenseRepository.findById(5L)).thenReturn(Optional.of(existing));
+        // カテゴリ取得も成功する（事前チェックは通過する）ようモックする
+        when(categoryRepository.findById(2L)).thenReturn(Optional.of(transport));
+        // 保存時にカテゴリ削除レースを模擬して外部キー違反を投げさせる
+        when(expenseRepository.save(any(Expense.class)))
+                // DB の制約違反例外を投げる
+                .thenThrow(new DataIntegrityViolationException("fk violation on category_id"));
+
+        // update 呼び出しが NotFoundException（404 相当）へ変換されることを検証する
+        assertThatThrownBy(() -> expenseService.update(5L, request))
+                // 例外型が NotFoundException であることを確認する（500 ではない）
+                .isInstanceOf(NotFoundException.class)
+                // 安全な日本語文言（カテゴリ未存在）に変換されていることを確認する
+                .hasMessage(ErrorMessages.CATEGORY_NOT_FOUND);
     }
 
     // search: month=null のとき期間は null のままリポジトリへ渡されることを検証する
