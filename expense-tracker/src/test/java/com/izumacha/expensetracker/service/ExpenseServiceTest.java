@@ -126,8 +126,8 @@ class ExpenseServiceTest {
                 LocalDate.of(2026, 6, 9));
         // カテゴリ検索が食費を返すようモックする
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(food));
-        // 保存時は ID 採番済みの支出を返すようモックする
-        when(expenseRepository.save(any(Expense.class)))
+        // 保存時は ID 採番済みの支出を返すようモックする（saveOrThrowIfCategoryVanished は saveAndFlush を使う）
+        when(expenseRepository.saveAndFlush(any(Expense.class)))
                 // 採番後の支出（id=10）を返す
                 .thenReturn(expense(10L, food, "1280", LocalDate.of(2026, 6, 9)));
 
@@ -164,8 +164,8 @@ class ExpenseServiceTest {
         assertThatThrownBy(() -> expenseService.create(request))
                 // 例外型が NotFoundException であることを確認する
                 .isInstanceOf(NotFoundException.class);
-        // 保存が一度も呼ばれていないことを検証する
-        verify(expenseRepository, never()).save(any());
+        // 保存が一度も呼ばれていないことを検証する（saveOrThrowIfCategoryVanished は saveAndFlush を使う）
+        verify(expenseRepository, never()).saveAndFlush(any());
     }
 
     // create: 存在チェック後にカテゴリが消えて保存が外部キー違反になった場合、500 ではなく 404 に変換されることを検証する
@@ -186,7 +186,8 @@ class ExpenseServiceTest {
         // カテゴリ検索は成功する（事前チェックは通過する）ようモックする
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(food));
         // 保存時に別リクエストがカテゴリを削除したレースを模擬して外部キー違反を投げさせる
-        when(expenseRepository.save(any(Expense.class)))
+        // （saveOrThrowIfCategoryVanished は saveAndFlush を使う）
+        when(expenseRepository.saveAndFlush(any(Expense.class)))
                 // DB の制約違反例外を投げる
                 .thenThrow(new DataIntegrityViolationException("fk violation on category_id"));
 
@@ -220,7 +221,9 @@ class ExpenseServiceTest {
         // カテゴリ取得も成功する（事前チェックは通過する）ようモックする
         when(categoryRepository.findById(2L)).thenReturn(Optional.of(transport));
         // 保存時にカテゴリ削除レースを模擬して外部キー違反を投げさせる
-        when(expenseRepository.save(any(Expense.class)))
+        // （saveOrThrowIfCategoryVanished は saveAndFlush を使う。update は merge 経由で遅延flushされうるため、
+        // この検証にこそ saveAndFlush への切り替えが本質的に必要）
+        when(expenseRepository.saveAndFlush(any(Expense.class)))
                 // DB の制約違反例外を投げる
                 .thenThrow(new DataIntegrityViolationException("fk violation on category_id"));
 
@@ -346,9 +349,9 @@ class ExpenseServiceTest {
         when(expenseRepository.findById(5L)).thenReturn(Optional.of(existing));
         // カテゴリ検索が交通費を返すようモックする
         when(categoryRepository.findById(2L)).thenReturn(Optional.of(transport));
-        // 保存は渡された支出をそのまま返すようモックする
-        when(expenseRepository.save(any(Expense.class)))
-                // save に渡された引数（更新後の支出）を返す
+        // 保存は渡された支出をそのまま返すようモックする（saveOrThrowIfCategoryVanished は saveAndFlush を使う）
+        when(expenseRepository.saveAndFlush(any(Expense.class)))
+                // saveAndFlush に渡された引数（更新後の支出）を返す
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         // テスト対象の update を呼び出す
