@@ -162,10 +162,17 @@ public class ExpenseService {
 
     // 支出を保存し、保存時の外部キー違反（カテゴリ消失レース）は404例外へ変換する（create/update 共通）
     private ExpenseResponse saveOrThrowIfCategoryVanished(Expense expense) {
-        // 事前の存在チェックをすり抜けた同時実行の削除は保存時に一意/外部キー制約違反となる
+        // 事前の存在チェックをすり抜けた同時実行の削除は保存時に一意/外部キー制約違反となる。
+        // update() では対象の Expense が既に ID を持つ管理対象エンティティのため、save() は
+        // 内部で merge() を呼び、UPDATE 文は既定では即座にフラッシュされずコミット時まで遅延されうる
+        // （CategoryService.update() と同じ理由）。遅延されたままだと、この try の外（トランザクション
+        // コミット時）で例外が発生し、この catch では捕捉できず 500 に戻ってしまう。create() は
+        // IDENTITY 採番の INSERT のため元々即時フラッシュされるが、update() と経路を共通化している
+        // 都合上、saveAndFlush で明示的に即時反映させ、両経路とも一意/外部キー制約違反をこの try 内で
+        // 確実に検知する。
         try {
-            // 保存して採番済み（更新時は更新後）のインスタンスを取得する
-            Expense saved = expenseRepository.save(expense);
+            // 保存を即時反映し、採番済み（更新時は更新後）のインスタンスを取得する
+            Expense saved = expenseRepository.saveAndFlush(expense);
             // 保存結果を DTO に変換して返す
             return ExpenseResponse.from(saved);
         } catch (DataIntegrityViolationException e) {
