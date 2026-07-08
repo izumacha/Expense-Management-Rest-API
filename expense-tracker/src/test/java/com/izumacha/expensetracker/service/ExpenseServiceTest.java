@@ -297,6 +297,21 @@ class ExpenseServiceTest {
                 .isInstanceOf(InvalidRequestException.class);
     }
 
+    // search: YearMonth.parse は通り plusMonths でもオーバーフローしないが、PostgreSQL の date 範囲
+    // （西暦 5874897 まで）を超える年は DB で範囲外エラーになり 500 に落ちていた回帰を防ぐ。
+    // "9999999-01"（7 桁の年）は plusMonths のオーバーフロー検証だけでは弾けないため、年範囲チェックで 400 にする。
+    @Test
+    void search_PostgreSQLのdate範囲を超える年は400例外() {
+        // 7 桁の年で search を呼ぶと InvalidRequestException（400 相当）になることを検証する（DB へ渡さず 500 を防ぐ）
+        assertThatThrownBy(() -> expenseService.search("9999999-01", null, PageRequest.of(0, 20)))
+                // 例外型が InvalidRequestException であることを確認する（500 ではない）
+                .isInstanceOf(InvalidRequestException.class);
+        // 負の年も同様に 400 として弾かれることを検証する（PostgreSQL date の下限を下回るため）
+        assertThatThrownBy(() -> expenseService.search("-1-01", null, PageRequest.of(0, 20)))
+                // 例外型が InvalidRequestException であることを確認する（500 ではない）
+                .isInstanceOf(InvalidRequestException.class);
+    }
+
     // findById: 存在しない ID は NotFoundException になることを検証する
     @Test
     void findById_不在時は404例外() {
@@ -454,6 +469,16 @@ class ExpenseServiceTest {
     void summary_範囲外の月は400例外() {
         // 範囲外の月で summary を呼ぶと InvalidRequestException（400 相当）になることを検証する
         assertThatThrownBy(() -> expenseService.summary("999999999-12"))
+                // 例外型が InvalidRequestException であることを確認する（500 ではない）
+                .isInstanceOf(InvalidRequestException.class);
+    }
+
+    // summary: search 側と同じく、PostgreSQL の date 範囲を超える年（plusMonths ではオーバーフロー
+    // しない 7 桁の年）が DB へ渡って 500 に落ちていた回帰を防ぐ。年範囲チェックで 400 にする。
+    @Test
+    void summary_PostgreSQLのdate範囲を超える年は400例外() {
+        // 7 桁の年で summary を呼ぶと InvalidRequestException（400 相当）になることを検証する（DB へ渡さず 500 を防ぐ）
+        assertThatThrownBy(() -> expenseService.summary("9999999-01"))
                 // 例外型が InvalidRequestException であることを確認する（500 ではない）
                 .isInstanceOf(InvalidRequestException.class);
     }

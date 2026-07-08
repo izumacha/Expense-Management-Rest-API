@@ -207,24 +207,34 @@ public class ExpenseService {
                 .orElseThrow(() -> new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND));
     }
 
+    // 受け付ける年の下限・上限（YYYY-MM 契約どおり 4 桁の正の年だけを許可する）。
+    // 背景: YearMonth.parse は西暦 999999999 まで通してしまう。しかし search / summary が期間として
+    // 使う LocalDate は最終的に PostgreSQL の date 型（西暦 5874897 まで）へ束縛されるため、5874897 を
+    // 超える年（例 "9999999-01"）はパースも「翌月初」計算も成功したうえで DB でだけ範囲外エラーになり、
+    // catch-all に落ちて 500（＋スタックトレース出力）になっていた。ここで妥当な年範囲に丸め、
+    // 範囲外は形式不正と同じ 400（不正リクエスト）として弾く。
+    private static final int MIN_YEAR = 1;     // 受け付ける年の下限（負の年・0 年は不正として弾く）
+    private static final int MAX_YEAR = 9999;  // 受け付ける年の上限（YYYY = 4 桁。PostgreSQL date 範囲に十分収まる）
+
     // YYYY-MM 形式の文字列を YearMonth に変換する
     private YearMonth parseMonth(String month) {
-        // 不正な形式・範囲外の月はいずれも400として扱うため、パースと期間計算の失敗を1箇所で捕捉する
+        // まず文字列を年月としてパースする。形式不正（DateTimeParseException など）は
+        // 生の入力値を外部に返さない安全な文言の 400 例外へ変換する（原因例外は追跡用に連鎖させる）。
+        YearMonth target;  // パース結果の年月を受け取る変数を宣言する
         try {
             // 文字列を年月としてパースする
-            YearMonth target = YearMonth.parse(month);
-            // 呼び出し側（search / summary）が行う「翌月初」計算をここでも先に実行して検証する。
-            // 例えば "999999999-12" は YearMonth.parse は通るが、plusMonths で Year の上限
-            // （999999999）を超えて DateTimeException を投げる。ここで弾かないと、その例外が
-            // parseMonth の外（呼び出し側）で未捕捉のまま catch-all に落ち 500 になってしまう。
-            target.plusMonths(1).atDay(1);
-            // 検証を通過した年月を返す
-            return target;
+            target = YearMonth.parse(month);
         } catch (DateTimeException e) {
-            // 形式不正（DateTimeParseException）と範囲外（plusMonths のオーバーフロー）の両方を
-            // 包含する親例外を捕捉する。生の入力値を外部に返さない安全な文言へ変換し、
-            // 原因例外は追跡用に連鎖させる（外部公開して安全な400例外）
+            // 形式不正を外部公開して安全な 400 例外へ変換する（原因はログ追跡用に連鎖させ、外部へは出さない）
             throw new InvalidRequestException(ErrorMessages.INVALID_MONTH_FORMAT, e);
         }
+        // 年が受け付け範囲外なら 400 として弾く。これにより PostgreSQL の date 範囲外の年が
+        // そのまま DB へ渡って 500 になる不具合（例 "9999999-01" や負の年）を未然に防ぐ。
+        if (target.getYear() < MIN_YEAR || target.getYear() > MAX_YEAR) {
+            // 範囲外の年は生入力を含めない安全な文言の 400 例外にする（形式不正と同じ扱い）
+            throw new InvalidRequestException(ErrorMessages.INVALID_MONTH_FORMAT);
+        }
+        // 検証を通過した年月を返す
+        return target;
     }
 }
