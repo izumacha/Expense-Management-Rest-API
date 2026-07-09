@@ -199,6 +199,67 @@ class ExpenseServiceTest {
                 .hasMessage(ErrorMessages.CATEGORY_NOT_FOUND);
     }
 
+    // create: 受け付け年範囲外の支出日は、DB へ渡す前に 400（InvalidRequestException）で弾かれ、
+    // 保存時 catch の「カテゴリ消失」404 へ誤変換されないことを検証する
+    @Test
+    void create_範囲外の支出日は400例外で保存に到達しない() {
+        // 事前チェックで存在するカテゴリ（食費）を用意する
+        Category food = category(1L, "食費");
+        // 支出日に PostgreSQL の date 範囲外の極端に古い年（-99999 年）を持つ作成リクエストを用意する
+        CreateExpenseRequest request = new CreateExpenseRequest(
+                // 金額
+                new BigDecimal("1280"),
+                // カテゴリ ID
+                1L,
+                // 説明
+                "ランチ",
+                // 範囲外の支出日（年 -99999）
+                LocalDate.of(-99999, 1, 1));
+        // カテゴリ検索は成功する（存在チェックは通過する）ようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(food));
+
+        // create 呼び出しが 400（InvalidRequestException）になることを検証する（404 でも 500 でもない）
+        assertThatThrownBy(() -> expenseService.create(request))
+                // 例外型が InvalidRequestException であることを確認する
+                .isInstanceOf(InvalidRequestException.class)
+                // 安全な日本語文言（支出日が不正）であることを確認する
+                .hasMessage(ErrorMessages.INVALID_SPENT_ON);
+        // DB へ渡す前に弾くため、保存は一度も呼ばれていないことを検証する
+        verify(expenseRepository, never()).saveAndFlush(any());
+    }
+
+    // update: 受け付け年範囲外の支出日は、DB へ渡す前に 400（InvalidRequestException）で弾かれることを検証する
+    @Test
+    void update_範囲外の支出日は400例外で保存に到達しない() {
+        // 交通費カテゴリと既存支出（id=5）を用意する
+        Category transport = category(2L, "交通費");
+        // 既存の支出を用意する
+        Expense existing = expense(5L, transport, "300", LocalDate.of(2026, 6, 1));
+        // 支出日に範囲外の極端に古い年（-99999 年）を持つ更新リクエストを用意する
+        UpdateExpenseRequest request = new UpdateExpenseRequest(
+                // 新しい金額
+                new BigDecimal("480"),
+                // カテゴリ ID
+                2L,
+                // 説明
+                "バス",
+                // 範囲外の支出日（年 -99999）
+                LocalDate.of(-99999, 1, 1));
+        // 対象支出の取得は成功するようモックする
+        when(expenseRepository.findById(5L)).thenReturn(Optional.of(existing));
+        // カテゴリ取得も成功する（存在チェックは通過する）ようモックする
+        when(categoryRepository.findById(2L)).thenReturn(Optional.of(transport));
+
+        // update 呼び出しが 400（InvalidRequestException）になることを検証する（404 でも 500 でもない）
+        assertThatThrownBy(() -> expenseService.update(5L, request))
+                // 例外型が InvalidRequestException であることを確認する
+                .isInstanceOf(InvalidRequestException.class)
+                // 安全な日本語文言（支出日が不正）であることを確認する
+                .hasMessage(ErrorMessages.INVALID_SPENT_ON);
+        // DB へ渡す前に弾くため、保存は一度も呼ばれていないことを検証する
+        verify(expenseRepository, never()).saveAndFlush(any());
+    }
+
     // update: 保存が外部キー違反になった場合も 500 ではなく 404 に変換されることを検証する
     @Test
     void update_保存時の外部キー制約違反は404例外に変換() {

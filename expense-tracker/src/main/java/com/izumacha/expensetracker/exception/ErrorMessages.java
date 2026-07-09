@@ -23,6 +23,9 @@ public final class ErrorMessages {
     // 月の形式が不正なときの安全な文言（生の入力値は含めない）
     public static final String INVALID_MONTH_FORMAT = "月の形式が正しくありません（YYYY-MM 形式で指定してください）";
 
+    // 支出日の年が受け付け範囲外のときの安全な文言（生の入力値は含めない）
+    public static final String INVALID_SPENT_ON = "支出日が正しくありません";
+
     // 必須パラメータが不足しているときの文言の接頭辞（後ろにパラメータ名を付ける）
     public static final String MISSING_PARAMETER = "必須パラメータが不足しています: ";
 
