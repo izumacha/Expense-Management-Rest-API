@@ -150,6 +150,8 @@ public class ExpenseService {
     // ここではプリミティブな値だけを受け取ることでロジックの重複を1箇所に共通化する）
     private void applyFields(Expense expense, BigDecimal amount, String description, LocalDate spentOn,
             Category category) {
+        // 支出日が受け付け年範囲外なら、DB へ渡す前に 400 で弾く（詳細は validateSpentOn 参照）
+        validateSpentOn(spentOn);
         // 金額を設定する
         expense.setAmount(amount);
         // カテゴリを設定する
@@ -176,8 +178,10 @@ public class ExpenseService {
             // 保存結果を DTO に変換して返す
             return ExpenseResponse.from(saved);
         } catch (DataIntegrityViolationException e) {
-            // Expense の外部キーは category_id のみで、amount/spentOn は事前に @NotNull 検証済み。
-            // よってこの時点の制約違反は「参照先カテゴリが消えた」ことを意味し、500 ではなく 404 を返す。
+            // Expense の外部キーは category_id のみ。amount は @NotNull + @Digits/@DecimalMin で、
+            // spentOn は @NotNull + @PastOrPresent に加え applyFields の validateSpentOn で年範囲まで
+            // 事前検証済み（DB の date 範囲外は 400 で先に弾く）。よってこの時点で残る制約違反は
+            // 「参照先カテゴリが消えた」レースだけなので、500 ではなく 404 を返す。
             // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
             throw new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e);
         }
@@ -236,5 +240,23 @@ public class ExpenseService {
         }
         // 検証を通過した年月を返す
         return target;
+    }
+
+    // 支出日の年が受け付け範囲外なら 400 として弾く。
+    // spentOn は DTO 側で @NotNull + @PastOrPresent（未来禁止＝上限のみ）しか検証されておらず、
+    // 下限が無い。LocalDate は -999999999 年まで受け付ける一方、PostgreSQL の date 型は 4713 BC
+    // までしか表現できないため、極端に古い年（例 "-99999-01-01"）がそのまま DB へ渡ると範囲外
+    // エラーになる。しかもその DataIntegrityViolationException は保存時 catch で「カテゴリが消えた」
+    // 404 に誤変換され、実在するカテゴリなのに 404＋誤ったメッセージを返してしまう。parseMonth と
+    // 同じ年範囲（MIN_YEAR..MAX_YEAR）で DB へ渡す前に弾き、月と同様に 400 として扱う。
+    private void validateSpentOn(LocalDate spentOn) {
+        // spentOn は @NotNull 済みだが、防御的に null のときは何もしない（ここでは年範囲だけを見る）
+        if (spentOn == null) {
+            return;
+        }
+        // 年が受け付け範囲外なら、生入力を含めない安全な文言の 400 例外にする
+        if (spentOn.getYear() < MIN_YEAR || spentOn.getYear() > MAX_YEAR) {
+            throw new InvalidRequestException(ErrorMessages.INVALID_SPENT_ON);
+        }
     }
 }
