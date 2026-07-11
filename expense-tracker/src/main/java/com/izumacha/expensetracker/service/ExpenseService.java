@@ -29,6 +29,8 @@ import com.izumacha.expensetracker.repository.CategoryRepository;
 import com.izumacha.expensetracker.repository.ExpenseRepository;
 // 合計初期値に使う10進数型
 import java.math.BigDecimal;
+// 合計の小数桁を揃える際の丸めモードを指定する型
+import java.math.RoundingMode;
 // 日付・時刻計算の失敗を表す親例外（形式不正の DateTimeParseException も範囲外の年月計算もこの型で捕捉できる）
 import java.time.DateTimeException;
 // 日付型
@@ -56,6 +58,11 @@ public class ExpenseService {
     private final ExpenseRepository expenseRepository;
     // カテゴリリポジトリへの参照
     private final CategoryRepository categoryRepository;
+
+    // 金額の小数桁数（DB の amount 列 numeric(19,2) の scale=2 に合わせる）。
+    // 集計結果の総合計を常にこの桁数へ揃え、支出のない月（"0"）と支出のある月（"1234.00"）で
+    // JSON の小数桁がバラつく API 契約の不整合を防ぐ。
+    private static final int MONEY_SCALE = 2;
 
     // コンストラクタインジェクションで依存を受け取る
     public ExpenseService(ExpenseRepository expenseRepository, CategoryRepository categoryRepository) {
@@ -140,7 +147,11 @@ public class ExpenseService {
                 // 各行の合計値を取り出す
                 .map(CategorySummary::total)
                 // ゼロを初期値に総和を求める
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                // 金額の桁数(小数2桁)へ揃える。支出のない月は BigDecimal.ZERO（scale=0→"0"）、
+                // 支出のある月は SUM 結果（scale=2→"1234.00"）となり JSON の小数桁がバラつくため、
+                // ここで常に scale=2 に正規化して契約を一定に保つ（金額は既に2桁以内なので丸めは発生しない）。
+                .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         // 集計結果を DTO に詰めて返す
         return new SummaryResponse(month, total, byCategory);
     }

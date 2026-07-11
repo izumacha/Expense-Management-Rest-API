@@ -511,8 +511,28 @@ class ExpenseServiceTest {
         assertThat(response.month()).isEqualTo("2026-06");
         // 総合計が 1500+500=2000 であることを検証する
         assertThat(response.total()).isEqualByComparingTo("2000");
+        // 金額の小数桁が常に 2 桁へ揃えられていることを検証する（"2000.00"）
+        assertThat(response.total().scale()).isEqualTo(2);
         // カテゴリ別の件数が 2 件であることを検証する
         assertThat(response.byCategory()).hasSize(2);
+    }
+
+    // summary: 支出が1件も無い月でも、総合計を小数2桁("0.00")で返し JSON の桁数を一定に保つことを検証する。
+    // BigDecimal.ZERO(scale=0)のまま返すと支出のある月("1234.00")と桁数がバラつく回帰を防ぐ。
+    @Test
+    void summary_支出の無い月でも合計は小数2桁のゼロを返す() {
+        // 集計クエリが空リストを返すようモックする（対象月に支出が無い状態）
+        when(expenseRepository.summarizeByCategory(any(), any())).thenReturn(List.of());
+
+        // 2026-06 の集計を取得する
+        SummaryResponse response = expenseService.summary("2026-06");
+
+        // 総合計が値として 0 であることを検証する
+        assertThat(response.total()).isEqualByComparingTo("0");
+        // 小数桁が 2 桁（"0.00"）に揃っていることを検証する
+        assertThat(response.total().scale()).isEqualTo(2);
+        // カテゴリ別が空であることを検証する
+        assertThat(response.byCategory()).isEmpty();
     }
 
     // summary: 不正な月形式は InvalidRequestException（400 相当）になることを検証する
