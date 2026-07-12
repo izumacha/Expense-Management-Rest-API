@@ -226,7 +226,6 @@ curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=
 本リポジトリは MVP（最小構成）です。以下は**意図的に未実装**で、今後の課題として整理しています。
 
 - **認証・認可**: 現状は単一利用者向けで、エンドポイントに認証はありません。公開・マルチユーザ化の際は、API キーや JWT などの認証と所有者単位のデータ分離を別途導入する必要があります。
-- **カテゴリの更新・削除 API**: 現状はカテゴリの作成・一覧のみです。更新・削除を追加する場合は、支出が紐づくカテゴリの扱い（削除禁止 or カスケード）の仕様を定義したうえで実装します。
 
 ---
 
@@ -525,7 +524,6 @@ What the `status` number means:
 This repository is an MVP. The following are **intentionally not implemented** and tracked as future work.
 
 - **Authentication / authorization**: The API is currently single-user and has no auth on its endpoints. Before going public or multi-user, add authentication (API key, JWT, etc.) and per-owner data isolation.
-- **Category update / delete API**: Only create and list are provided for categories. Adding update/delete requires first defining how categories that have expenses are handled (block deletion vs. cascade).
 
 ---
 
