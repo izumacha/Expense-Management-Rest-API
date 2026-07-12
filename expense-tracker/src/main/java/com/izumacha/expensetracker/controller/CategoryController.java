@@ -72,7 +72,8 @@ public class CategoryController {
 
     // カテゴリ詳細を取得する（成功時 200）。作成時の Location ヘッダ（/api/categories/{id}）が
     // 指す取得用エンドポイント。存在しない ID はサービスが 404 相当の例外を送出する。
-    // 一覧の固定パス（@GetMapping）と衝突しないよう、可変パス {id} をこの順序で定義する。
+    // 下の一覧の固定パス（@GetMapping、パス末尾なし）とはマッピングされる URL の形自体が
+    // 異なる（こちらは末尾に 1 セグメント必須）ため、宣言順に関わらずそもそも衝突しない。
     @GetMapping("/{id}")
     public CategoryResponse detail(@PathVariable("id") Long id) {
         // サービスで指定 ID のカテゴリを取得して返す

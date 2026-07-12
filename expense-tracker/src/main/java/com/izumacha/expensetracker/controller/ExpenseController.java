@@ -91,7 +91,9 @@ public class ExpenseController {
         return expenseService.search(month, categoryId, sanitized);
     }
 
-    // 月次集計を取得する（成功時 200）。一覧より先に固定パスを定義する
+    // 月次集計を取得する（成功時 200）。Spring は宣言順ではなく最も具体的なパターン
+    // （このような固定パスは可変パス {id} より具体的）を優先して解決するため、
+    // 下の detail() の @GetMapping("/{id}") とは宣言順に関わらず衝突しない
     @GetMapping("/summary")
     public SummaryResponse summary(@RequestParam("month") String month) {
         // サービスで月次集計を取得して返す
