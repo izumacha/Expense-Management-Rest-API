@@ -135,6 +135,8 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 }
 ```
 
+> `byCategory` は合計金額の大きい順（同額ならカテゴリ ID の小さい順）で、**最大 100 カテゴリまで**返します（超えた分は打ち切られます）。`total` は打ち切りに関係なく、その月の**すべての支出**の合計です。
+
 ---
 
 ## API 一覧
@@ -434,6 +436,8 @@ It returns that month's **total** and a **per-category breakdown**.
   ]
 }
 ```
+
+> `byCategory` is sorted by amount in descending order (ties broken by ascending category ID) and returns **at most 100 categories** (anything beyond that is truncated). `total` always covers **every expense** in the month, regardless of truncation.
 
 ---
 

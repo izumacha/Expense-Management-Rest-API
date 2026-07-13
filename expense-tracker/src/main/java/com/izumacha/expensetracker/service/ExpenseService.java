@@ -43,6 +43,8 @@ import java.util.List;
 import org.springframework.dao.DataIntegrityViolationException;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
+// ページ番号・件数からページ指定を組み立てる実装（summary の件数上限に使う）
+import org.springframework.data.domain.PageRequest;
 // ページ指定（ページ番号・件数）を表す型
 import org.springframework.data.domain.Pageable;
 // Spring のサービスコンポーネント宣言
@@ -63,6 +65,13 @@ public class ExpenseService {
     // 集計結果の総合計を常にこの桁数へ揃え、支出のない月（"0"）と支出のある月（"1234.00"）で
     // JSON の小数桁がバラつく API 契約の不整合を防ぐ。
     private static final int MONEY_SCALE = 2;
+
+    // 月次集計（summary）の byCategory が返すカテゴリ別内訳の最大件数。
+    // カテゴリ数は API 経由で無制限に増やせるため、上限が無いと集計応答が際限なく肥大化し
+    // リソース枯渇を招く（共通規約 §8「一覧取得は必ず上限を持たせる」§9 DoS 防止）。
+    // 一覧 API の上限（application.yml の spring.data.web.pageable.max-page-size: 100）と
+    // 同じ値に揃え、上限を超えた分は合計降順の上位だけ返して打ち切る（README に契約として明記）。
+    private static final int SUMMARY_MAX_CATEGORIES = 100;
 
     // コンストラクタインジェクションで依存を受け取る
     public ExpenseService(ExpenseRepository expenseRepository, CategoryRepository categoryRepository) {
@@ -140,17 +149,22 @@ public class ExpenseService {
         LocalDate start = target.atDay(1);
         // 期間終了（翌月初・含まない）を求める
         LocalDate end = target.plusMonths(1).atDay(1);
-        // GROUP BY でカテゴリ別合計を取得する
-        List<CategorySummary> byCategory = expenseRepository.summarizeByCategory(start, end);
-        // カテゴリ別合計を足し上げて総合計を算出する
-        BigDecimal total = byCategory.stream()
-                // 各行の合計値を取り出す
-                .map(CategorySummary::total)
-                // ゼロを初期値に総和を求める
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                // 金額の桁数(小数2桁)へ揃える。支出のない月は BigDecimal.ZERO（scale=0→"0"）、
-                // 支出のある月は SUM 結果（scale=2→"1234.00"）となり JSON の小数桁がバラつくため、
-                // ここで常に scale=2 に正規化して契約を一定に保つ（金額は既に2桁以内なので丸めは発生しない）。
+        // GROUP BY でカテゴリ別合計を取得する。件数無制限の取得を避けるため（共通規約 §8/§9）、
+        // 合計降順→カテゴリID昇順の上位 SUMMARY_MAX_CATEGORIES 件だけに打ち切る
+        List<CategorySummary> byCategory = expenseRepository.summarizeByCategory(
+                // 期間（月初〜翌月初）を渡す
+                start, end,
+                // 先頭ページ＋上限件数のページ指定で LIMIT を掛ける（並び順は JPQL 側で固定済み）
+                PageRequest.of(0, SUMMARY_MAX_CATEGORIES));
+        // 総合計は byCategory の足し上げではなく月全体の SUM クエリで求める。
+        // byCategory が上限で打ち切られた場合でも、total は常に「その月のすべての支出の合計」
+        // であり続け、打ち切りの影響を受けない（API 契約の意味を保つ）。
+        BigDecimal monthTotal = expenseRepository.sumAmount(start, end);
+        // 支出が1件も無い月は SUM が null を返すためゼロへフォールバックし、そのうえで
+        // 常に scale=2（"0.00"/"1234.00"）に正規化して JSON の小数桁がバラつかない契約を保つ
+        // （金額は既に2桁以内なので丸めは発生しない）。
+        BigDecimal total = (monthTotal == null ? BigDecimal.ZERO : monthTotal)
+                // 金額の桁数（小数2桁）へ揃える
                 .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         // 集計結果を DTO に詰めて返す
         return new SummaryResponse(month, total, byCategory);

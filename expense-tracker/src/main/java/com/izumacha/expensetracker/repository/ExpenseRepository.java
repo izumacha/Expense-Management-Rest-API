@@ -5,6 +5,8 @@ package com.izumacha.expensetracker.repository;
 import com.izumacha.expensetracker.domain.Expense;
 // カテゴリ別集計 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategorySummary;
+// 合計金額の戻り型（10進数の金額型）
+import java.math.BigDecimal;
 // 日付型
 import java.time.LocalDate;
 // 一覧の戻り型
@@ -70,7 +72,12 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
     // 指定カテゴリを参照する支出が1件でも存在するか判定する（カテゴリ削除時の使用中チェック用）
     boolean existsByCategoryId(Long categoryId);
 
-    // 月次のカテゴリ別合計を GROUP BY で集計するクエリ
+    // 月次のカテゴリ別合計を GROUP BY で集計するクエリ。
+    // GET /api/expenses/summary は唯一「一覧形状なのに件数上限が無い」応答だったため、
+    // Pageable で上限を掛けて無制限取得を防ぐ（共通規約 §8/§9。上限値は ExpenseService 側の定数）。
+    // 並び順は JPQL の ORDER BY（合計降順→カテゴリID昇順）で固定するため、渡す Pageable は
+    // 並び順なし（先頭ページ＋件数のみ）とする。LIMIT は Spring Data JPA が Pageable から
+    // プロバイダ非依存に適用するので、JPQL に DB 固有の構文は持ち込まない。
     @Query("""
             SELECT new com.izumacha.expensetracker.dto.response.CategorySummary(
                 e.category.id, e.category.name, SUM(e.amount))
@@ -80,6 +87,22 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
             ORDER BY SUM(e.amount) DESC, e.category.id ASC
             """)
     List<CategorySummary> summarizeByCategory(
+            // 期間の開始日（月初・含む）
+            @Param("start") LocalDate start,
+            // 期間の終了日（翌月初・含まない）
+            @Param("end") LocalDate end,
+            // 返す最大件数を制限するページ指定（先頭ページ＋上限件数のみを想定）
+            Pageable pageable
+    );
+
+    // 期間内の支出の総合計を求めるクエリ（期間内に支出が無い場合は SUM の仕様どおり null が返る）。
+    // summary の total は byCategory（上限件数で打ち切られうる）の足し上げではなくこの月全体の
+    // SUM を使うことで、打ち切りが起きても常に「その月の総合計」であり続ける。
+    @Query("""
+            SELECT SUM(e.amount) FROM Expense e
+            WHERE e.spentOn >= :start AND e.spentOn < :end
+            """)
+    BigDecimal sumAmount(
             // 期間の開始日（月初・含む）
             @Param("start") LocalDate start,
             // 期間の終了日（翌月初・含まない）

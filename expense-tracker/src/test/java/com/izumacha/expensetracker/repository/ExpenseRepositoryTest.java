@@ -180,7 +180,9 @@ class ExpenseRepositoryTest extends AbstractRepositoryTest {
                 // 開始日（月初・含む）
                 LocalDate.of(2026, 6, 1),
                 // 終了日（翌月初・含まない）
-                LocalDate.of(2026, 7, 1));
+                LocalDate.of(2026, 7, 1),
+                // 十分大きい件数上限（打ち切りが起きないページ指定）
+                PageRequest.of(0, 10));
 
         // カテゴリは食費・交通費の 2 件であることを検証する
         assertThat(result).hasSize(2);
@@ -206,15 +208,62 @@ class ExpenseRepositoryTest extends AbstractRepositoryTest {
         expenseRepository.save(expense(a, "300", LocalDate.of(2026, 8, 1)));
         expenseRepository.save(expense(b, "300", LocalDate.of(2026, 8, 2)));
 
-        // 8 月の期間でカテゴリ別集計を取得する
+        // 8 月の期間でカテゴリ別集計を取得する（十分大きい件数上限で打ち切りなし）
         List<CategorySummary> result = expenseRepository.summarizeByCategory(
-                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 9, 1));
+                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 9, 1), PageRequest.of(0, 10));
 
         // カテゴリは娯楽費・日用品の 2 件であることを検証する
         assertThat(result).hasSize(2);
         // 合計は同額(300)だが、カテゴリ ID の小さい方（先に保存した a）が先頭になることを検証する
         assertThat(result.get(0).categoryId()).isEqualTo(a.getId());
         assertThat(result.get(1).categoryId()).isEqualTo(b.getId());
+    }
+
+    // summarizeByCategory: ページ指定の件数上限で内訳が打ち切られ、合計降順の上位だけが返ることを検証する
+    // （GET /api/expenses/summary の byCategory を無制限取得にしない共通規約 §8/§9 の担保）
+    @Test
+    void summarizeByCategory_件数上限で合計降順の上位だけに打ち切られる() {
+        // 6 月にはカテゴリが 2 件（食費 1500・交通費 500）ある状態で、上限 1 件のページ指定で集計する
+        List<CategorySummary> result = expenseRepository.summarizeByCategory(
+                // 開始日（月初・含む）
+                LocalDate.of(2026, 6, 1),
+                // 終了日（翌月初・含まない）
+                LocalDate.of(2026, 7, 1),
+                // 上限 1 件のページ指定（打ち切りを意図的に発生させる）
+                PageRequest.of(0, 1));
+
+        // 上限どおり 1 件だけ返ることを検証する（LIMIT が効いている）
+        assertThat(result).hasSize(1);
+        // 返るのは合計が最も大きい食費（1500）であることを検証する（合計降順の上位から打ち切る）
+        assertThat(result.get(0).categoryName()).isEqualTo("食費");
+        // 食費の合計が 1500 であることを検証する
+        assertThat(result.get(0).total()).isEqualByComparingTo("1500");
+    }
+
+    // sumAmount: 期間内の支出全体の合計を返すことを検証する（byCategory の打ち切りに依存しない総合計の源）
+    @Test
+    void sumAmount_期間内の総合計を返す() {
+        // 6 月の期間（食費 1000+500・交通費 500）で総合計を取得する
+        BigDecimal total = expenseRepository.sumAmount(
+                // 開始日（月初・含む）
+                LocalDate.of(2026, 6, 1),
+                // 終了日（翌月初・含まない）
+                LocalDate.of(2026, 7, 1));
+
+        // 総合計が 2000（7/1 の 9999 円は含まない）であることを検証する
+        assertThat(total).isEqualByComparingTo("2000");
+    }
+
+    // sumAmount: 期間内に支出が無ければ SUM の仕様どおり null を返すことを検証する
+    // （サービス側はこの null をゼロへフォールバックする契約のため、null が返る事実をここで固定する）
+    @Test
+    void sumAmount_支出の無い期間はnullを返す() {
+        // 支出が 1 件も無い 2020 年 1 月の期間で総合計を取得すると null であることを検証する
+        assertThat(expenseRepository.sumAmount(
+                // 開始日（月初・含む）
+                LocalDate.of(2020, 1, 1),
+                // 終了日（翌月初・含まない）
+                LocalDate.of(2020, 2, 1))).isNull();
     }
 
     // existsByCategoryId: 支出から参照されているカテゴリなら true を返すことを検証する

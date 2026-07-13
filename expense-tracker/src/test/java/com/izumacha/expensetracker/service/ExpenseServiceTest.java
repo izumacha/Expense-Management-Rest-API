@@ -40,6 +40,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 // ページ指定（ページ番号・件数）を生成する型
 import org.springframework.data.domain.PageRequest;
+// ページ指定（ページ番号・件数）を表す型（summary の上限指定を捕捉する検証に使う）
+import org.springframework.data.domain.Pageable;
 
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
@@ -518,24 +520,26 @@ class ExpenseServiceTest {
                 .isInstanceOf(NotFoundException.class);
     }
 
-    // summary: カテゴリ別合計を足し上げて総合計が算出されることを検証する
+    // summary: 総合計は月全体の SUM クエリから、内訳はカテゴリ別集計から組み立てられることを検証する
     @Test
-    void summary_カテゴリ別合計の総和を返す() {
+    void summary_月全体の合計とカテゴリ別内訳を返す() {
         // カテゴリ別集計（食費1500・交通費500）をモック結果として用意する
         List<CategorySummary> byCategory = List.of(
                 // 食費の合計行
                 new CategorySummary(1L, "食費", new BigDecimal("1500")),
                 // 交通費の合計行
                 new CategorySummary(2L, "交通費", new BigDecimal("500")));
-        // 集計クエリが上記結果を返すようモックする
-        when(expenseRepository.summarizeByCategory(any(), any())).thenReturn(byCategory);
+        // 集計クエリが上記結果を返すようモックする（第3引数は件数上限のページ指定）
+        when(expenseRepository.summarizeByCategory(any(), any(), any())).thenReturn(byCategory);
+        // 月全体の合計クエリが 2000 を返すようモックする
+        when(expenseRepository.sumAmount(any(), any())).thenReturn(new BigDecimal("2000.00"));
 
         // 2026-06 の集計を取得する
         SummaryResponse response = expenseService.summary("2026-06");
 
         // 月がそのまま返ることを検証する
         assertThat(response.month()).isEqualTo("2026-06");
-        // 総合計が 1500+500=2000 であることを検証する
+        // 総合計が月全体の SUM（2000）であることを検証する
         assertThat(response.total()).isEqualByComparingTo("2000");
         // 金額の小数桁が常に 2 桁へ揃えられていることを検証する（"2000.00"）
         assertThat(response.total().scale()).isEqualTo(2);
@@ -543,12 +547,42 @@ class ExpenseServiceTest {
         assertThat(response.byCategory()).hasSize(2);
     }
 
+    // summary: カテゴリ別内訳は上限件数（100件・先頭ページ）で打ち切られるページ指定で問い合わせられ、
+    // 総合計は打ち切りの影響を受けない月全体の SUM を使うことを検証する（無制限取得の防止・共通規約 §8/§9）
+    @Test
+    void summary_内訳は上限100件で問い合わせ総合計は月全体のSUMを使う() {
+        // 上限まで打ち切られた内訳を模すため、任意の1件だけを返すようモックする
+        when(expenseRepository.summarizeByCategory(any(), any(), any()))
+                // 内訳としては食費 1500 円の行だけが返る（打ち切り後の姿を模す）
+                .thenReturn(List.of(new CategorySummary(1L, "食費", new BigDecimal("1500"))));
+        // 月全体の合計は内訳の合計より大きい 9999.99 を返すようモックする（打ち切りに影響されない値）
+        when(expenseRepository.sumAmount(any(), any())).thenReturn(new BigDecimal("9999.99"));
+
+        // 2026-06 の集計を取得する
+        SummaryResponse response = expenseService.summary("2026-06");
+
+        // 総合計が内訳の足し上げ（1500）ではなく月全体の SUM（9999.99）であることを検証する
+        assertThat(response.total()).isEqualByComparingTo("9999.99");
+
+        // 集計クエリに渡されたページ指定を捕捉するキャプチャを用意する
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        // summarizeByCategory 呼び出しの第3引数（ページ指定）を捕捉する
+        verify(expenseRepository).summarizeByCategory(any(), any(), pageableCaptor.capture());
+        // 先頭ページ（0 ページ目）が指定されていることを検証する
+        assertThat(pageableCaptor.getValue().getPageNumber()).isEqualTo(0);
+        // 件数上限が一覧 API と同じ 100 件であることを検証する
+        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(100);
+    }
+
     // summary: 支出が1件も無い月でも、総合計を小数2桁("0.00")で返し JSON の桁数を一定に保つことを検証する。
-    // BigDecimal.ZERO(scale=0)のまま返すと支出のある月("1234.00")と桁数がバラつく回帰を防ぐ。
+    // 月全体の SUM は該当行が無いと null を返すため、null をゼロへフォールバックできていないと
+    // NullPointerException で 500 に落ちる。あわせて scale=0 の "0" に退行しないことも確認する。
     @Test
     void summary_支出の無い月でも合計は小数2桁のゼロを返す() {
         // 集計クエリが空リストを返すようモックする（対象月に支出が無い状態）
-        when(expenseRepository.summarizeByCategory(any(), any())).thenReturn(List.of());
+        when(expenseRepository.summarizeByCategory(any(), any(), any())).thenReturn(List.of());
+        // 月全体の合計クエリは SUM の仕様どおり null を返すようモックする
+        when(expenseRepository.sumAmount(any(), any())).thenReturn(null);
 
         // 2026-06 の集計を取得する
         SummaryResponse response = expenseService.summary("2026-06");
