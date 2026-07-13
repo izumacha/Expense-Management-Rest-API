@@ -9,4 +9,10 @@ public class DuplicateException extends RuntimeException {
         // 親クラスにメッセージを渡す
         super(message);
     }
+
+    // メッセージと原因例外を受け取るコンストラクタ（握り潰さず原因を連鎖させる。共通規約 §6）
+    public DuplicateException(String message, Throwable cause) {
+        // 親クラスにメッセージと原因例外を渡す
+        super(message, cause);
+    }
 }
