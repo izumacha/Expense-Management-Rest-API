@@ -6,6 +6,17 @@ import com.izumacha.expensetracker.controller.ExpenseController;
 // コントローラが依存する支出サービス（モックする）
 import com.izumacha.expensetracker.service.ExpenseService;
 
+// ログレベル（WARN 等）を表す Logback の列挙
+import ch.qos.logback.classic.Level;
+// Logback の実体ロガー（テストから appender を付け外しするために使う）
+import ch.qos.logback.classic.Logger;
+// 1 件のログ出力イベントを表す型
+import ch.qos.logback.classic.spi.ILoggingEvent;
+// 出力されたログをメモリ上のリストに溜めるテスト用 appender
+import ch.qos.logback.core.read.ListAppender;
+// ロガーを取得するファクトリ（SLF4J）
+import org.slf4j.LoggerFactory;
+
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
 // 依存を注入するアノテーション
@@ -149,6 +160,46 @@ class GlobalExceptionHandlerTest {
                 .andExpect(status().isBadRequest())
                 // 本体の message が汎用の安全文言（内部詳細を含まない）であることを検証する
                 .andExpect(jsonPath("$.message").value(ErrorMessages.BAD_REQUEST));
+    }
+
+    // 想定外の IllegalArgumentException はサーバログに WARN で記録され、握り潰されない
+    // （サーバ側バグの発生を観測できる）ことを検証する。外部応答は上のテストで検証済みのため、
+    // ここでは Logback のテスト用 appender でログ出力の有無・レベル・原因例外の連鎖を確認する
+    @Test
+    void 想定外のIllegalArgumentはWARNログに記録される() throws Exception {
+        // 検証対象ハンドラの実体ロガー（Logback）を取得する
+        Logger handlerLogger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        // ログ出力をメモリ上に溜めるテスト用 appender を生成する
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        // appender を稼働状態にする（start しないとイベントが溜まらない）
+        appender.start();
+        // ハンドラのロガーへ appender を取り付ける
+        handlerLogger.addAppender(appender);
+        try {
+            // search が内部詳細を含む IllegalArgumentException を投げるようモックする
+            when(expenseService.search(any(), any(), any()))
+                    // サーバ側バグを模した例外を投げる
+                    .thenThrow(new IllegalArgumentException("internal detail: ownerId=42"));
+
+            // 一覧エンドポイントへ GET する（400 になることは前提として軽く確認する）
+            mockMvc.perform(get("/api/expenses"))
+                    // ステータスが 400 であることを検証する
+                    .andExpect(status().isBadRequest());
+
+            // WARN レベルで、原因例外（IllegalArgumentException）を連鎖させたログが 1 件記録されたことを検証する
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                    // WARN かつ throwable が IllegalArgumentException のイベントが存在することを確認する
+                    .anySatisfy(event -> {
+                        // ログレベルが WARN であることを検証する
+                        org.assertj.core.api.Assertions.assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                        // 原因例外の型名が IllegalArgumentException であることを検証する（追跡可能性の確認）
+                        org.assertj.core.api.Assertions.assertThat(event.getThrowableProxy().getClassName())
+                                .isEqualTo(IllegalArgumentException.class.getName());
+                    });
+        } finally {
+            // 他のテストへ影響しないよう、取り付けた appender を必ず取り外す
+            handlerLogger.detachAppender(appender);
+        }
     }
 
     // 未定義パス（存在しないURL）は 404 と {status,message} 形式になり、
