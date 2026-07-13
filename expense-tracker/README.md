@@ -105,7 +105,7 @@ curl -X POST http://localhost:8080/api/expenses \
 ```json
 {
   "id": 1,
-  "amount": 1280,
+  "amount": 1280.00,
   "categoryId": 1,
   "categoryName": "食費",
   "description": "ランチ",
@@ -113,6 +113,8 @@ curl -X POST http://localhost:8080/api/expenses \
   "createdAt": "2026-06-09T12:30:00"
 }
 ```
+
+> `amount` は DB 列（`numeric(19,2)`）に合わせて常に小数2桁で返ります（`1280` を送っても `1280.00` が返ります）。
 
 ### 4. 月の集計を見る
 
@@ -125,10 +127,10 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 ```json
 {
   "month": "2026-06",
-  "total": 52340,
+  "total": 52340.00,
   "byCategory": [
-    { "categoryId": 1, "categoryName": "食費",   "total": 31200 },
-    { "categoryId": 2, "categoryName": "交通費", "total": 21140 }
+    { "categoryId": 1, "categoryName": "食費",   "total": 31200.00 },
+    { "categoryId": 2, "categoryName": "交通費", "total": 21140.00 }
   ]
 }
 ```
@@ -403,7 +405,7 @@ Example of what comes back:
 ```json
 {
   "id": 1,
-  "amount": 1280,
+  "amount": 1280.00,
   "categoryId": 1,
   "categoryName": "Food",
   "description": "Lunch",
@@ -411,6 +413,8 @@ Example of what comes back:
   "createdAt": "2026-06-09T12:30:00"
 }
 ```
+
+> `amount` always comes back with 2 decimal places to match the DB column (`numeric(19,2)`) — sending `1280` still returns `1280.00`.
 
 ### 4. View the monthly summary
 
@@ -423,10 +427,10 @@ It returns that month's **total** and a **per-category breakdown**.
 ```json
 {
   "month": "2026-06",
-  "total": 52340,
+  "total": 52340.00,
   "byCategory": [
-    { "categoryId": 1, "categoryName": "Food",      "total": 31200 },
-    { "categoryId": 2, "categoryName": "Transport", "total": 21140 }
+    { "categoryId": 1, "categoryName": "Food",      "total": 31200.00 },
+    { "categoryId": 2, "categoryName": "Transport", "total": 21140.00 }
   ]
 }
 ```
