@@ -49,6 +49,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 // Spring のサービスコンポーネント宣言
 import org.springframework.stereotype.Service;
+// トランザクションの分離レベル（他の同時実行処理からどこまで隔離するか）を指定する列挙
+import org.springframework.transaction.annotation.Isolation;
 // トランザクション境界の宣言
 import org.springframework.transaction.annotation.Transactional;
 
@@ -140,8 +142,14 @@ public class ExpenseService {
         expenseRepository.delete(expense);
     }
 
-    // 指定月の合計とカテゴリ別合計を集計する
-    @Transactional(readOnly = true)
+    // 指定月の合計とカテゴリ別合計を集計する。
+    // 分離レベルを REPEATABLE_READ に上げる理由: このメソッドはカテゴリ別内訳（summarizeByCategory）と
+    // 総合計（sumAmount）の 2 クエリを発行する。既定の READ_COMMITTED では 2 クエリの間に別リクエストの
+    // 書き込みがコミットされると、total と byCategory の足し上げが（意図した上限打ち切り以外の理由で）
+    // 食い違ってしまう。PostgreSQL の REPEATABLE_READ はスナップショット分離であり、トランザクション内の
+    // 全クエリが同一スナップショット（同じ瞬間のデータ）を見るため、両クエリの整合が保証される。
+    // Isolation は JPA/Spring 標準の指定であり、プロバイダ固有 SQL を持ち込まない（JPQL も無変更）。
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public SummaryResponse summary(String month) {
         // 対象月をパースする
         YearMonth target = parseMonth(month);
