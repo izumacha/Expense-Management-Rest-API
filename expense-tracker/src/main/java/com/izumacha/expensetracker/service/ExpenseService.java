@@ -163,8 +163,10 @@ public class ExpenseService {
             Category category) {
         // 支出日が受け付け年範囲外なら、DB へ渡す前に 400 で弾く（詳細は validateSpentOn 参照）
         validateSpentOn(spentOn);
-        // 金額を設定する
-        expense.setAmount(amount);
+        // 金額の桁数(小数2桁)へ揃えてから設定する。@Digits(fraction=2) は上限のみを検証し
+        // 桁数不足（例: 10.5）を弾かないため、揃えないと作成/更新直後のレスポンスだけ
+        // scale がずれ（"10.5"）、後続の GET（DB の numeric(19,2) 由来）は "10.50" になる。
+        expense.setAmount(amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
         // カテゴリを設定する
         expense.setCategory(category);
         // 説明を設定する
