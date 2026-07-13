@@ -32,6 +32,8 @@ import org.springframework.dao.DataAccessResourceFailureException;
 // HTTP リクエストを擬似実行するクライアント
 import org.springframework.test.web.servlet.MockMvc;
 
+// 値の検証に使う assertThat を取り込む（AssertJ。他のテストクラスと同じ static import に統一する）
+import static org.assertj.core.api.Assertions.assertThat;
 // any() マッチャを取り込む（Mockito）
 import static org.mockito.ArgumentMatchers.any;
 // 戻り値・例外を設定する when を取り込む（Mockito）
@@ -187,13 +189,13 @@ class GlobalExceptionHandlerTest {
                     .andExpect(status().isBadRequest());
 
             // WARN レベルで、原因例外（IllegalArgumentException）を連鎖させたログが 1 件記録されたことを検証する
-            org.assertj.core.api.Assertions.assertThat(appender.list)
+            assertThat(appender.list)
                     // WARN かつ throwable が IllegalArgumentException のイベントが存在することを確認する
                     .anySatisfy(event -> {
                         // ログレベルが WARN であることを検証する
-                        org.assertj.core.api.Assertions.assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                        assertThat(event.getLevel()).isEqualTo(Level.WARN);
                         // 原因例外の型名が IllegalArgumentException であることを検証する（追跡可能性の確認）
-                        org.assertj.core.api.Assertions.assertThat(event.getThrowableProxy().getClassName())
+                        assertThat(event.getThrowableProxy().getClassName())
                                 .isEqualTo(IllegalArgumentException.class.getName());
                     });
         } finally {
