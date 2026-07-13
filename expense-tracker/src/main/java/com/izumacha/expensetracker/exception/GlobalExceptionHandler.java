@@ -52,9 +52,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(), ex.getMessage()));
     }
 
-    // 想定外の IllegalArgumentException（フレームワーク／ライブラリ由来を含む）を400として処理するハンドラ
+    // 想定外の IllegalArgumentException（フレームワーク／ライブラリ由来を含む）を400として処理するハンドラ。
+    // 現状のクライアント入力経路はこの例外を発生させない（不正入力は InvalidRequestException 等で
+    // 先に処理される）ため、ここに到達したらサーバ側バグの可能性が高い。多層防御として 400 の
+    // マッピング自体は残しつつ（既存の API 契約・テストとも整合）、黙って握り潰すとバグが観測
+    // 不能になるため、発生をサーバログに WARN で記録して追跡できるようにする（共通規約 §6）。
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
+        // 発生した事実と詳細（スタックトレース）をサーバログにだけ WARN で記録する（外部には出さない）
+        log.warn("想定外の IllegalArgumentException を 400 として処理しました", ex);
         // 例外メッセージには内部詳細が含まれうるため外部には出さず、汎用の安全文言だけを返す
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 // 本体にステータスと汎用の安全メッセージを格納する
