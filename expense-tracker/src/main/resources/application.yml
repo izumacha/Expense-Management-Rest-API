@@ -6,8 +6,12 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/expensetracker}
     # 接続ユーザー名（秘密情報ではないためローカル開発用の既定値を許可する）
     username: ${SPRING_DATASOURCE_USERNAME:expensetracker}
-    # 接続パスワード（秘密情報のため既定値を持たせず、未設定なら起動を失敗させる＝fail-closed）
-    password: ${SPRING_DATASOURCE_PASSWORD:?データベースのパスワードを環境変数 SPRING_DATASOURCE_PASSWORD で必ず設定してください}
+    # 接続パスワード（秘密情報のため既定値を持たせない）。
+    # 注意: Spring のプレースホルダは bash と違い「:?」を必須指定とは解釈せず、最初の「:」以降を
+    # すべて既定値として扱う（＝「:?メッセージ」と書くと、そのメッセージ文字列がパスワードとして
+    # 使われて起動できてしまう fail-open）。既定値なしにすれば、未設定時はプレースホルダが
+    # 解決できず起動そのものが失敗する＝本当の fail-closed になる。
+    password: ${SPRING_DATASOURCE_PASSWORD}
     # 使用する JDBC ドライバ
     driver-class-name: org.postgresql.Driver
   # JPA / Hibernate の設定
