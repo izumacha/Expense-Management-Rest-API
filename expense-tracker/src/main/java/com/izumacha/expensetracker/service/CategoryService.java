@@ -72,8 +72,9 @@ public class CategoryService {
             // 保存結果を DTO に変換して返す
             return CategoryResponse.from(saved);
         } catch (DataIntegrityViolationException e) {
-            // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する
-            throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
+            // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する。
+            // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
+            throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE, e);
         }
     }
 
@@ -112,8 +113,9 @@ public class CategoryService {
             // 変更を即時反映して保存し、DTO に変換して返す
             return CategoryResponse.from(categoryRepository.saveAndFlush(category));
         } catch (DataIntegrityViolationException e) {
-            // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する
-            throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
+            // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する。
+            // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
+            throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE, e);
         }
     }
 
@@ -137,8 +139,9 @@ public class CategoryService {
             categoryRepository.delete(category);
             categoryRepository.flush();
         } catch (DataIntegrityViolationException e) {
-            // DB の外部キー制約違反を、入力値を含めない安全な文言で 409 相当の使用中例外へ変換する
-            throw new CategoryInUseException(ErrorMessages.CATEGORY_IN_USE);
+            // DB の外部キー制約違反を、入力値を含めない安全な文言で 409 相当の使用中例外へ変換する。
+            // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
+            throw new CategoryInUseException(ErrorMessages.CATEGORY_IN_USE, e);
         }
     }
 
