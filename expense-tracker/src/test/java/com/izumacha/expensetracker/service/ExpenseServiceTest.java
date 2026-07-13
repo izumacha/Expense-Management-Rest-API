@@ -144,6 +144,32 @@ class ExpenseServiceTest {
         assertThat(response.categoryName()).isEqualTo("食費");
     }
 
+    // create: 小数桁不足の金額(10.5)を保存前に scale=2 (10.50)へ揃えることを検証する。
+    // 揃えないと、作成直後のレスポンスだけ scale がずれ（"10.5"）、後続の GET
+    // （DB の numeric(19,2) 由来）は "10.50" になり、同一リソースの表現が変わってしまう。
+    @Test
+    void create_小数桁不足の金額はscale2に揃えてから保存する() {
+        // 既存カテゴリ（食費）を用意する
+        Category food = category(1L, "食費");
+        // 小数第1位までしかない金額（10.5）でリクエストを組み立てる
+        CreateExpenseRequest request = new CreateExpenseRequest(
+                new BigDecimal("10.5"), 1L, "コーヒー", LocalDate.of(2026, 6, 9));
+        // カテゴリ検索が食費を返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(food));
+        // 保存時は受け取った Expense をそのまま返す（実際の DB 挙動を模し、amount は呼び出し引数から検証する）
+        when(expenseRepository.saveAndFlush(any(Expense.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        // テスト対象の create を呼び出す
+        expenseService.create(request);
+
+        // saveAndFlush に渡された Expense を捕捉し、amount の scale が 2 に揃っていることを検証する
+        ArgumentCaptor<Expense> captor = ArgumentCaptor.forClass(Expense.class);
+        verify(expenseRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getAmount()).isEqualByComparingTo("10.5");
+        assertThat(captor.getValue().getAmount().scale()).isEqualTo(2);
+    }
+
     // create: カテゴリが存在しなければ NotFoundException になることを検証する
     @Test
     void create_カテゴリ不在時は404例外() {

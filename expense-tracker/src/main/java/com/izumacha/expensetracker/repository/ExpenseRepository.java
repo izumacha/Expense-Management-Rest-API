@@ -77,7 +77,7 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
             FROM Expense e
             WHERE e.spentOn >= :start AND e.spentOn < :end
             GROUP BY e.category.id, e.category.name
-            ORDER BY SUM(e.amount) DESC
+            ORDER BY SUM(e.amount) DESC, e.category.id ASC
             """)
     List<CategorySummary> summarizeByCategory(
             // 期間の開始日（月初・含む）

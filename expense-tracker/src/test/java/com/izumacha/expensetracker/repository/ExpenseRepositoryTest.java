@@ -194,6 +194,29 @@ class ExpenseRepositoryTest extends AbstractRepositoryTest {
         assertThat(result.get(1).total()).isEqualByComparingTo("500");
     }
 
+    // summarizeByCategory: 合計金額が同額のカテゴリ間ではカテゴリID昇順で安定した順序になることを検証する。
+    // SUM(amount) だけを ORDER BY にすると、同額カテゴリ間の相対順序が実行のたびに変わりうる
+    // （ページングや繰り返し呼び出しで表示順が入れ替わる非決定性の原因になる）。
+    @Test
+    void summarizeByCategory_合計が同額ならカテゴリID昇順で安定する() {
+        // food/transport とは別に、8月の合計が完全に同額(300円)になる2カテゴリを用意する
+        Category a = categoryRepository.save(new Category("娯楽費"));
+        Category b = categoryRepository.save(new Category("日用品"));
+        // 両カテゴリとも 8 月に 300 円ずつ支出する
+        expenseRepository.save(expense(a, "300", LocalDate.of(2026, 8, 1)));
+        expenseRepository.save(expense(b, "300", LocalDate.of(2026, 8, 2)));
+
+        // 8 月の期間でカテゴリ別集計を取得する
+        List<CategorySummary> result = expenseRepository.summarizeByCategory(
+                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 9, 1));
+
+        // カテゴリは娯楽費・日用品の 2 件であることを検証する
+        assertThat(result).hasSize(2);
+        // 合計は同額(300)だが、カテゴリ ID の小さい方（先に保存した a）が先頭になることを検証する
+        assertThat(result.get(0).categoryId()).isEqualTo(a.getId());
+        assertThat(result.get(1).categoryId()).isEqualTo(b.getId());
+    }
+
     // existsByCategoryId: 支出から参照されているカテゴリなら true を返すことを検証する
     @Test
     void existsByCategoryId_参照されていればtrue() {
