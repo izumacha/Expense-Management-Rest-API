@@ -19,6 +19,16 @@ import org.springframework.data.domain.Sort;
 // そこで Web 境界でクライアントの sort を捨て、サーバ側で定めた安全な並び順に固定する。
 public final class PageableSanitizer {
 
+    // ページ番号（0始まり）の上限。件数（size）側は application.yml の
+    // spring.data.web.pageable.max-page-size で Spring Boot が自動的に丸めるが、
+    // ページ番号側には Spring Data Web の既定機能に上限がない。
+    // 未検証のまま極端に大きい page（例: ?page=999999999）を許すと、行数が少ない
+    // 応答のために DB へ深い OFFSET を発行させ続けられ、公開・無認証エンドポイントに対する
+    // 安価なリソース消費増幅の起点になる（§8 一覧取得の上限・§9 DoS 対策）。
+    // 家計簿という利用規模を踏まえ、size=100 と組み合わせても十分な件数（100万件超）を
+    // カバーできる値を上限として一元管理する。
+    static final int MAX_PAGE_INDEX = 10_000;
+
     // インスタンス化を防ぐための private コンストラクタ（静的メソッドだけを提供するため）
     private PageableSanitizer() {
     }
@@ -33,7 +43,10 @@ public final class PageableSanitizer {
             // ページングは行わず、サーバ指定の安全な並び順だけを適用した unpaged な Pageable を返す
             return Pageable.unpaged(fixedSort);
         }
-        // ページ番号・件数はクライアント指定を尊重し、並び順だけをサーバ指定の安全な値へ差し替える
-        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), fixedSort);
+        // ページ番号が上限を超えていれば上限に丸める（深い OFFSET クエリを防ぐ。§8/§9）
+        int clampedPageNumber = Math.min(pageable.getPageNumber(), MAX_PAGE_INDEX);
+        // 件数はクライアント指定を尊重し（size 自体の上限は application.yml 側で担保済み）、
+        // ページ番号は上で丸めた値、並び順はサーバ指定の安全な値へ差し替える
+        return PageRequest.of(clampedPageNumber, pageable.getPageSize(), fixedSort);
     }
 }
