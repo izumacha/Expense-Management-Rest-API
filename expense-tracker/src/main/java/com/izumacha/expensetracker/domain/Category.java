@@ -13,8 +13,6 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 // テーブル名・制約指定用アノテーション
 import jakarta.persistence.Table;
-// 一意制約指定用アノテーション
-import jakarta.persistence.UniqueConstraint;
 // Lombok のゲッター自動生成
 import lombok.Getter;
 // Lombok の引数なしコンストラクタ自動生成
@@ -24,8 +22,10 @@ import lombok.Setter;
 
 // カテゴリを表すエンティティ
 @Entity
-// テーブル名と name 列の一意制約を定義
-@Table(name = "categories", uniqueConstraints = @UniqueConstraint(columnNames = "name"))
+// テーブル名を定義（name 列の一意制約は下の @Column(unique = true) 側で一元管理する。
+// 以前はここにも @Table(uniqueConstraints = ...) で同じ制約を重複宣言しており、
+// ddl-auto: update 環境で同一列に対する冗長な UNIQUE 制約/インデックスが2つ生成されていた）
+@Table(name = "categories")
 // ゲッターを自動生成
 @Getter
 // セッターを自動生成
