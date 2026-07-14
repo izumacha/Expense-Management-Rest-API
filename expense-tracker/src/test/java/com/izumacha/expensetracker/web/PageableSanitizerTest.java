@@ -69,4 +69,33 @@ class PageableSanitizerTest {
         // それでもサーバ指定の並び順が適用されていることを検証する
         assertThat(result.getSort()).isEqualTo(fixed);
     }
+
+    // 上限以下のページ番号はそのまま引き継がれることを検証する（正常系の回帰防止）
+    @Test
+    void 上限以下のページ番号はそのまま引き継がれる() {
+        // 上限ちょうどのページ番号を指定した Pageable を用意する
+        Pageable input = PageRequest.of(PageableSanitizer.MAX_PAGE_INDEX, 20, Sort.unsorted());
+
+        // 無害化する
+        Pageable result = PageableSanitizer.withFixedSort(input, Sort.unsorted());
+
+        // 上限ちょうどの値は丸められず、そのまま引き継がれることを検証する
+        assertThat(result.getPageNumber()).isEqualTo(PageableSanitizer.MAX_PAGE_INDEX);
+    }
+
+    // 上限を超える極端なページ番号（例: ?page=999999999）は上限に丸められ、
+    // 深い OFFSET クエリで DB へ負荷をかけ続けられないことを検証する（§8/§9）
+    @Test
+    void 上限を超えるページ番号は上限に丸められる() {
+        // 上限を大きく超えるページ番号を指定した Pageable を用意する
+        Pageable input = PageRequest.of(Integer.MAX_VALUE - 1, 20, Sort.unsorted());
+
+        // 無害化する
+        Pageable result = PageableSanitizer.withFixedSort(input, Sort.unsorted());
+
+        // ページ番号が上限まで丸められていることを検証する
+        assertThat(result.getPageNumber()).isEqualTo(PageableSanitizer.MAX_PAGE_INDEX);
+        // 件数・並び順は他のテストと同じ仕様のまま影響を受けないことを検証する
+        assertThat(result.getPageSize()).isEqualTo(20);
+    }
 }
