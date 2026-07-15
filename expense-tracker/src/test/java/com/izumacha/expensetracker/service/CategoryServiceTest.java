@@ -123,6 +123,32 @@ class CategoryServiceTest {
         verify(categoryRepository, never()).existsByName(" 食費 ");
     }
 
+    // create: 濁点付き仮名の分解表現(NFD)は合成表現(NFC)へ正規化してから重複チェックすることを検証する。
+    // "\u30D0\u30B9\u4EE3"(バス代)は「\u30D0(バ、合成済み1文字)+\u30B9(ス)+\u4EE3(代)」(NFC)と
+    // 「\u30CF(ハ)+\u3099(濁点、結合文字)+\u30B9(ス)+\u4EE3(代)」(NFD)の2通りの符号化で
+    // 見た目が同一になるため、NFC正規化が無いと別名として重複チェックをすり抜けてしまう
+    // (Category.name のDB一意制約も単純な文字列比較のため防げない)。
+    // コード中は Unicode コードポイントのエスケープ表記で明示する
+    // (エディタ上では両表現が視覚的に区別できず、テストが実際にNFD入力を
+    // 使っていることをソースコード上で保証できないため)。
+    @Test
+    void create_NFD分解表現の濁点はNFC合成表現へ正規化してから重複チェックする() {
+        // "バス代"のNFD分解表現("\u30CF\u3099\u30B9\u4EE3")で作成リクエストを用意する
+        CreateCategoryRequest request = new CreateCategoryRequest("\u30CF\u3099\u30B9\u4EE3");
+        // NFC正規化後の名前("\u30D0\u30B9\u4EE3"、合成表現)で重複チェックが false(重複なし)を返すようモックする
+        when(categoryRepository.existsByName("\u30D0\u30B9\u4EE3")).thenReturn(false);
+        // 保存時はNFC正規化済み名前で採番済みのカテゴリを返すようモックする
+        when(categoryRepository.save(any(Category.class))).thenReturn(category(1L, "\u30D0\u30B9\u4EE3"));
+
+        // テスト対象の create を呼び出す
+        CategoryResponse response = categoryService.create(request);
+
+        // 返却 DTO の名前がNFC正規化済み(合成表現)であることを検証する
+        assertThat(response.name()).isEqualTo("\u30D0\u30B9\u4EE3");
+        // NFD分解表現の生の値では重複チェックを呼んでいないことを検証する
+        verify(categoryRepository, never()).existsByName("\u30CF\u3099\u30B9\u4EE3");
+    }
+
     // create: 同名が既に存在すれば DuplicateException になり保存されないことを検証する
     @Test
     void create_事前チェックで重複なら409例外() {

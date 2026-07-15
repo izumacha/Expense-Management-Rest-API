@@ -44,11 +44,10 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 
 // テストメソッドを宣言するアノテーション
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 // Mockito を JUnit 5 と連携させる拡張
 import org.junit.jupiter.api.extension.ExtendWith;
-// モック対象を宣言するアノテーション
-import org.mockito.InjectMocks;
 // モックを生成するアノテーション
 import org.mockito.Mock;
 // 引数を捕捉するためのクラス
@@ -81,9 +80,15 @@ class ExpenseServiceTest {
     @Mock
     private CategoryRepository categoryRepository;
 
-    // 上記モックを注入したテスト対象のサービス
-    @InjectMocks
+    // テスト対象のサービス（summaryMaxCategories はプリミティブ int のため
+    // Mockito の @InjectMocks ではモック注入できず、明示的にコンストラクタで組み立てる）
     private ExpenseService expenseService;
+
+    // 各テスト前に、application.yml の既定値(100)と同じ上限でサービスを組み立てる
+    @BeforeEach
+    void setUp() {
+        expenseService = new ExpenseService(expenseRepository, categoryRepository, 100);
+    }
 
     // ID を持つカテゴリを組み立てるヘルパー
     private Category category(long id, String name) {
