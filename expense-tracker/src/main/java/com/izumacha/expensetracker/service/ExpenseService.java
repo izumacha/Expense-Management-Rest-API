@@ -47,6 +47,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 // ページ指定（ページ番号・件数）を表す型
 import org.springframework.data.domain.Pageable;
+// application.yml の設定値をフィールド/コンストラクタ引数へ注入するためのアノテーション
+import org.springframework.beans.factory.annotation.Value;
 // Spring のサービスコンポーネント宣言
 import org.springframework.stereotype.Service;
 // トランザクションの分離レベル（他の同時実行処理からどこまで隔離するか）を指定する列挙
@@ -71,16 +73,23 @@ public class ExpenseService {
     // 月次集計（summary）の byCategory が返すカテゴリ別内訳の最大件数。
     // カテゴリ数は API 経由で無制限に増やせるため、上限が無いと集計応答が際限なく肥大化し
     // リソース枯渇を招く（共通規約 §8「一覧取得は必ず上限を持たせる」§9 DoS 防止）。
-    // 一覧 API の上限（application.yml の spring.data.web.pageable.max-page-size: 100）と
-    // 同じ値に揃え、上限を超えた分は合計降順の上位だけ返して打ち切る（README に契約として明記）。
-    private static final int SUMMARY_MAX_CATEGORIES = 100;
+    // 一覧 API の上限（application.yml の spring.data.web.pageable.max-page-size）と同じ値を
+    // @Value で直接注入することで二重管理を無くし、設定変更時の値ズレ（片方だけ変更されて
+    // 一覧とsummaryで上限が食い違う不具合）を構造的に防ぐ。
+    private final int summaryMaxCategories;
 
     // コンストラクタインジェクションで依存を受け取る
-    public ExpenseService(ExpenseRepository expenseRepository, CategoryRepository categoryRepository) {
+    public ExpenseService(
+            ExpenseRepository expenseRepository,
+            CategoryRepository categoryRepository,
+            // application.yml の一覧ページング上限値をそのまま注入する（未設定時は既定の100件）
+            @Value("${spring.data.web.pageable.max-page-size:100}") int summaryMaxCategories) {
         // 支出リポジトリをフィールドに設定する
         this.expenseRepository = expenseRepository;
         // カテゴリリポジトリをフィールドに設定する
         this.categoryRepository = categoryRepository;
+        // 注入されたページング上限値を summary の打ち切り件数としても使う
+        this.summaryMaxCategories = summaryMaxCategories;
     }
 
     // 支出を新規登録する
@@ -158,12 +167,12 @@ public class ExpenseService {
         // 期間終了（翌月初・含まない）を求める
         LocalDate end = target.plusMonths(1).atDay(1);
         // GROUP BY でカテゴリ別合計を取得する。件数無制限の取得を避けるため（共通規約 §8/§9）、
-        // 合計降順→カテゴリID昇順の上位 SUMMARY_MAX_CATEGORIES 件だけに打ち切る
+        // 合計降順→カテゴリID昇順の上位 summaryMaxCategories 件だけに打ち切る
         List<CategorySummary> byCategory = expenseRepository.summarizeByCategory(
                 // 期間（月初〜翌月初）を渡す
                 start, end,
                 // 先頭ページ＋上限件数のページ指定で LIMIT を掛ける（並び順は JPQL 側で固定済み）
-                PageRequest.of(0, SUMMARY_MAX_CATEGORIES));
+                PageRequest.of(0, summaryMaxCategories));
         // 総合計は byCategory の足し上げではなく月全体の SUM クエリで求める。
         // byCategory が上限で打ち切られた場合でも、total は常に「その月のすべての支出の合計」
         // であり続け、打ち切りの影響を受けない（API 契約の意味を保つ）。
