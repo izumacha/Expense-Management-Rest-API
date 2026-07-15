@@ -23,6 +23,8 @@ import com.izumacha.expensetracker.exception.NotFoundException;
 import com.izumacha.expensetracker.repository.CategoryRepository;
 // 支出リポジトリを参照する（削除時にカテゴリが支出から使用中か確認するため）
 import com.izumacha.expensetracker.repository.ExpenseRepository;
+// Unicode 正規化（合成済み/分解済みなど見た目が同じでも符号化が異なる文字列を同一視するため）に使う
+import java.text.Normalizer;
 // 一意制約違反を検出する例外
 import org.springframework.dao.DataIntegrityViolationException;
 // ページ単位の取得結果を表す型
@@ -54,10 +56,9 @@ public class CategoryService {
     // カテゴリを新規作成する
     @Transactional
     public CategoryResponse create(CreateCategoryRequest request) {
-        // 前後の空白を取り除く（" 食費" と "食費" を別名として扱わないため。
-        // Category のコンストラクタでも同じ正規化を行うが、重複チェックを
-        // 実際に保存される値と一致させるためここでも明示的に揃えておく）
-        String normalizedName = request.name().strip();
+        // 前後の空白除去とUnicode正規化を行う（create/updateで重複しないよう一元化）。
+        // 実際に保存される値と重複チェックの対象を一致させるためここで明示的に揃える
+        String normalizedName = normalizeName(request.name());
         // 同名カテゴリが既に存在する場合は重複例外を投げる（409）
         if (categoryRepository.existsByName(normalizedName)) {
             // 入力値を含めない安全な文言で重複を示す例外を送出する
@@ -96,8 +97,8 @@ public class CategoryService {
         Category category = categoryRepository.findById(id)
                 // 見つからなければ内部 ID を含めない安全な文言で 404 相当の例外を送出する
                 .orElseThrow(() -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND));
-        // 前後の空白を取り除く（create と同じ正規化。実際に保存される値で重複チェックを行うため）
-        String normalizedName = request.name().strip();
+        // create と同じ正規化（空白除去+Unicode正規化）。実際に保存される値で重複チェックを行うため
+        String normalizedName = normalizeName(request.name());
         // 自分自身を除いた同名カテゴリが既に存在する場合は重複例外を投げる（409）
         if (categoryRepository.existsByNameAndIdNot(normalizedName, id)) {
             // 入力値を含めない安全な文言で重複を示す例外を送出する
@@ -143,6 +144,16 @@ public class CategoryService {
             // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
             throw new CategoryInUseException(ErrorMessages.CATEGORY_IN_USE, e);
         }
+    }
+
+    // カテゴリ名を正規化する（空白除去 + Unicode NFC正規化）。
+    // 濁点/半濁点付き仮名などは合成済み(NFC)と分解済み(NFD)の2通りの符号化で
+    // 見た目が同一の文字列を作れてしまい、strip() だけでは別名として重複チェックを
+    // すり抜けてしまう（既存の existsByName / existsByNameAndIdNot はDBの一意制約も
+    // 含め単純な文字列比較のため）。NFC に揃えることで見た目が同じ名前を確実に同一視する。
+    private static String normalizeName(String name) {
+        // strip() で前後の空白を取り除いてから正規化する（strip() 自体はUnicode対応）
+        return Normalizer.normalize(name.strip(), Normalizer.Form.NFC);
     }
 
     // カテゴリ一覧をページ単位で取得する
