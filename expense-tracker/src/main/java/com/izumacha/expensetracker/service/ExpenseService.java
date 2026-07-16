@@ -41,6 +41,8 @@ import java.time.YearMonth;
 import java.util.List;
 // DB 制約違反（外部キー違反など）を表す例外。同時実行でカテゴリが消えた場合の保存失敗を捕捉する
 import org.springframework.dao.DataIntegrityViolationException;
+// 楽観ロックの行数不一致例外。同時実行で更新/削除対象の支出自体が消えた場合に発生する
+import org.springframework.dao.OptimisticLockingFailureException;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
 // ページ番号・件数からページ指定を組み立てる実装（summary の件数上限に使う）
@@ -147,8 +149,18 @@ public class ExpenseService {
     public void delete(Long id) {
         // 削除対象の支出を取得する（無ければ404）
         Expense expense = findExpenseOrThrow(id);
-        // 取得した支出を削除する
-        expenseRepository.delete(expense);
+        // 事前の存在チェックをすり抜けた同時実行の削除（この間に別リクエストが同じ支出を
+        // 削除した）レースをこの try 内で確実に検知するため、flush() で明示的に即時反映させる
+        // （CategoryService.delete() と同じ理由。既定では DELETE 文は即座にフラッシュされない）。
+        try {
+            // 取得した支出を削除し、即時反映してから確定する
+            expenseRepository.delete(expense);
+            expenseRepository.flush();
+        } catch (OptimisticLockingFailureException e) {
+            // 削除対象の行が既に無く、DELETE の影響行数が0件だった（同時実行で先に消された）ケース。
+            // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
+            throw new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND, e);
+        }
     }
 
     // 指定月の合計とカテゴリ別合計を集計する。
@@ -228,6 +240,11 @@ public class ExpenseService {
             // 「参照先カテゴリが消えた」レースだけなので、500 ではなく 404 を返す。
             // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
             throw new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e);
+        } catch (OptimisticLockingFailureException e) {
+            // UPDATE の影響行数が0件だった、つまり更新対象の支出自体が同時実行で消えたレース。
+            // create() は新規 INSERT でこの経路を通らないため、update() 由来と確定できる
+            // （影響行数チェックは UPDATE/DELETE のみで起こり、INSERT では発生しない）。
+            throw new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND, e);
         }
     }
 
