@@ -47,4 +47,7 @@ public final class ErrorMessages {
 
     // レート制限を超過したときの安全な文言（しきい値の詳細は含めない）
     public static final String TOO_MANY_REQUESTS = "リクエストが多すぎます。しばらく待って再試行してください";
+
+    // リクエスト本文が上限サイズを超えたときの安全な文言（しきい値の詳細は含めない）
+    public static final String PAYLOAD_TOO_LARGE = "リクエスト本文が大きすぎます";
 }

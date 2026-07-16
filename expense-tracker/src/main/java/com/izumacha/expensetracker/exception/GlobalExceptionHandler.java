@@ -94,6 +94,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(new ErrorResponse(HttpStatus.CONFLICT.value(), ex.getMessage()));
     }
 
+    // リクエスト本文サイズの上限超過（413）を処理するハンドラ。
+    // RequestBodySizeLimitFilter が Content-Length を偽る／付けないクライアントに備えて本文読み取り
+    // 自体を上限で打ち切る際、Jackson のストリーム読取中（コントローラ呼び出し前）に送出される。
+    // Content-Length の事前チェック（同フィルタの早期拒否）と同じ 413 契約に揃えて整形する。
+    @ExceptionHandler(RequestBodyTooLargeException.class)
+    public ResponseEntity<ErrorResponse> handleRequestBodyTooLarge(RequestBodyTooLargeException ex) {
+        // 413 のエラーレスポンスを返す
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                // 本体にステータスと例外メッセージを格納する
+                .body(new ErrorResponse(HttpStatus.PAYLOAD_TOO_LARGE.value(), ex.getMessage()));
+    }
+
     // パス変数・クエリの型不一致（例：GET /api/expenses/abc）を400として処理するハンドラ
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
