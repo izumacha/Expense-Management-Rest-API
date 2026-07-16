@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Optional;
 // DB 制約違反例外（保存時のカテゴリ消失レースを模擬するために使う）
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
 // ページ指定（ページ番号・件数）を生成する型
@@ -67,6 +68,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 // 呼び出されなかったことを検証する never を取り込む（Mockito）
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doThrow;
 
 // ExpenseService をモック依存だけでテストする（DB には接続しない）
 @ExtendWith(MockitoExtension.class)
@@ -329,6 +331,42 @@ class ExpenseServiceTest {
                 .hasMessage(ErrorMessages.CATEGORY_NOT_FOUND);
     }
 
+    // update: 事前チェック後に更新対象の支出自体が同時実行で削除され、UPDATE の影響行数が0件
+    // （楽観ロック例外）になった場合も 500 ではなく 404（支出未存在）に変換されることを検証する
+    @Test
+    void update_保存対象の支出自体が消えたレースは404例外に変換() {
+        // 交通費カテゴリと既存支出（id=5）を用意する
+        Category transport = category(2L, "交通費");
+        // 既存の支出を用意する
+        Expense existing = expense(5L, transport, "300", LocalDate.of(2026, 6, 1));
+        // 更新リクエストを用意する
+        UpdateExpenseRequest request = new UpdateExpenseRequest(
+                // 新しい金額
+                new BigDecimal("480"),
+                // カテゴリ ID
+                2L,
+                // 説明
+                "バス",
+                // 新しい支出日
+                LocalDate.of(2026, 6, 5));
+        // 対象支出の取得は成功するようモックする（この時点ではまだ存在する）
+        when(expenseRepository.findById(5L)).thenReturn(Optional.of(existing));
+        // カテゴリ取得も成功する（事前チェックは通過する）ようモックする
+        when(categoryRepository.findById(2L)).thenReturn(Optional.of(transport));
+        // 保存時に別リクエストが同じ支出を削除したレースを模擬して楽観ロック例外を投げさせる
+        // （UPDATE の影響行数が0件だった場合に Hibernate/Spring が送出する例外）
+        when(expenseRepository.saveAndFlush(any(Expense.class)))
+                // 楽観ロックの行数不一致例外を投げる
+                .thenThrow(new OptimisticLockingFailureException("0 rows affected"));
+
+        // update 呼び出しが NotFoundException（404 相当）へ変換されることを検証する
+        assertThatThrownBy(() -> expenseService.update(5L, request))
+                // 例外型が NotFoundException であることを確認する（500 ではない）
+                .isInstanceOf(NotFoundException.class)
+                // 安全な日本語文言（支出未存在。カテゴリ未存在とは異なるメッセージ）に変換されていることを確認する
+                .hasMessage(ErrorMessages.EXPENSE_NOT_FOUND);
+    }
+
     // search: month=null のとき期間は null のままリポジトリへ渡されることを検証する
     @Test
     void search_月未指定なら期間nullで全件問い合わせ() {
@@ -523,6 +561,30 @@ class ExpenseServiceTest {
         assertThatThrownBy(() -> expenseService.delete(7L))
                 // 例外型が NotFoundException であることを確認する
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    // delete: 事前の存在チェック後、削除対象の支出自体が同時実行で既に削除され、
+    // DELETE の影響行数が0件（楽観ロック例外）になった場合も 500 ではなく 404 に変換されることを検証する
+    @Test
+    void delete_削除対象が既に消えたレースは404例外に変換() {
+        // 既存カテゴリを用意する
+        Category food = category(1L, "食費");
+        // 既存支出（id=7）を用意する（この時点ではまだ存在する）
+        Expense existing = expense(7L, food, "1000", LocalDate.of(2026, 6, 2));
+        // 支出検索が既存支出を返すようモックする
+        when(expenseRepository.findById(7L)).thenReturn(Optional.of(existing));
+        // flush() の時点で別リクエストが先に削除していたレースを模擬して楽観ロック例外を投げさせる
+        // （CategoryService.delete() と同じく明示的な flush() でこの try 内での検知を保証する設計）
+        doThrow(new OptimisticLockingFailureException("0 rows affected"))
+                // flush 呼び出し時に例外を投げるようモックする
+                .when(expenseRepository).flush();
+
+        // delete 呼び出しが NotFoundException（404 相当）へ変換されることを検証する
+        assertThatThrownBy(() -> expenseService.delete(7L))
+                // 例外型が NotFoundException であることを確認する（500 ではない）
+                .isInstanceOf(NotFoundException.class)
+                // 安全な日本語文言（支出未存在）に変換されていることを確認する
+                .hasMessage(ErrorMessages.EXPENSE_NOT_FOUND);
     }
 
     // summary: 総合計は月全体の SUM クエリから、内訳はカテゴリ別集計から組み立てられることを検証する

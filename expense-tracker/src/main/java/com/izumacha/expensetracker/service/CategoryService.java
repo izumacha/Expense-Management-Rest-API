@@ -27,6 +27,8 @@ import com.izumacha.expensetracker.repository.ExpenseRepository;
 import java.text.Normalizer;
 // 一意制約違反を検出する例外
 import org.springframework.dao.DataIntegrityViolationException;
+// 楽観ロックの行数不一致例外。同時実行で更新/削除対象のカテゴリ自体が消えた場合に発生する
+import org.springframework.dao.OptimisticLockingFailureException;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
 // ページ指定（ページ番号・件数）を表す型
@@ -117,6 +119,10 @@ public class CategoryService {
             // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する。
             // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
             throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE, e);
+        } catch (OptimisticLockingFailureException e) {
+            // UPDATE の影響行数が0件だった、つまり更新対象のカテゴリ自体が同時実行で
+            // 削除されたレース。500 ではなく 404 を返す（原因例外は追跡用に連鎖させる）。
+            throw new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e);
         }
     }
 
@@ -143,6 +149,10 @@ public class CategoryService {
             // DB の外部キー制約違反を、入力値を含めない安全な文言で 409 相当の使用中例外へ変換する。
             // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
             throw new CategoryInUseException(ErrorMessages.CATEGORY_IN_USE, e);
+        } catch (OptimisticLockingFailureException e) {
+            // DELETE の影響行数が0件だった、つまり削除対象のカテゴリ自体が同時実行で
+            // 既に削除されたレース。500 ではなく 404 を返す（原因例外は追跡用に連鎖させる）。
+            throw new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e);
         }
     }
 

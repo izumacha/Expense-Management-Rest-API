@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 // 一意制約違反を表す例外
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 // ページ実体を組み立てる型
 import org.springframework.data.domain.PageImpl;
 // ページ指定（ページ番号・件数）を表す型
@@ -308,6 +309,27 @@ class CategoryServiceTest {
                 .isInstanceOf(DuplicateException.class);
     }
 
+    // update: 事前チェック後に更新対象のカテゴリ自体が同時実行で削除され、UPDATE の影響行数が0件
+    // （楽観ロック例外）になった場合も 500 ではなく 404（カテゴリ未存在）に変換されることを検証する
+    @Test
+    void update_保存対象のカテゴリ自体が消えたレースは404例外に変換() {
+        // 更新前のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 主キー 1 の検索で更新前カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 事前チェックは false（重複なし）を返すようモックする
+        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(false);
+        // 保存時に別リクエストが同じカテゴリを削除したレースを模擬して楽観ロック例外を投げさせる
+        when(categoryRepository.saveAndFlush(any(Category.class)))
+                // 楽観ロックの行数不一致例外を投げる
+                .thenThrow(new OptimisticLockingFailureException("0 rows affected"));
+
+        // update 呼び出しで NotFoundException（404 相当）に変換されることを検証する
+        assertThatThrownBy(() -> categoryService.update(1L, new UpdateCategoryRequest("交通費")))
+                // 例外型が NotFoundException であることを確認する（409 の重複例外ではない）
+                .isInstanceOf(NotFoundException.class);
+    }
+
     // delete: 支出から参照されていなければ削除することを検証する
     @Test
     void delete_未参照なら削除する() {
@@ -378,6 +400,27 @@ class CategoryServiceTest {
         assertThatThrownBy(() -> categoryService.delete(1L))
                 // 例外型が CategoryInUseException であることを確認する
                 .isInstanceOf(CategoryInUseException.class);
+    }
+
+    // delete: 事前の存在チェック後、削除対象のカテゴリ自体が同時実行で既に削除され、
+    // DELETE の影響行数が0件（楽観ロック例外）になった場合も 500 ではなく 404 に変換されることを検証する
+    @Test
+    void delete_削除対象が既に消えたレースは404例外に変換() {
+        // 削除対象のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 主キー 1 の検索で対象カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 支出からの参照は無い（false）を返すようモックする
+        when(expenseRepository.existsByCategoryId(1L)).thenReturn(false);
+        // flush() の時点で別リクエストが先に削除していたレースを模擬して楽観ロック例外を投げさせる
+        doThrow(new OptimisticLockingFailureException("0 rows affected"))
+                // 対象のメソッドを指定する
+                .when(categoryRepository).flush();
+
+        // delete 呼び出しで NotFoundException（404 相当）に変換されることを検証する
+        assertThatThrownBy(() -> categoryService.delete(1L))
+                // 例外型が NotFoundException であることを確認する（409 の使用中例外ではない）
+                .isInstanceOf(NotFoundException.class);
     }
 
     // findAll: 全カテゴリが DTO のページに変換されることを検証する
