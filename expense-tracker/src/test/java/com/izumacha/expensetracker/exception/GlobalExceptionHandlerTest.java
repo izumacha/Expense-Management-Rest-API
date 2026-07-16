@@ -222,6 +222,26 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.path").doesNotExist());
     }
 
+    // アプリ由来の RequestBodyTooLargeException は 413 と、送出側が指定した安全文言で返ることを検証する
+    // （RequestBodySizeLimitFilter が Content-Length を偽る/付けないクライアントに備えて実読み取り
+    // バイト数自体を打ち切る際に、コントローラ呼び出し前の JSON パース中に送出する例外の整形を確認する）
+    @Test
+    void 本文サイズ超過例外は413で安全文言() throws Exception {
+        // search が本文サイズ超過の RequestBodyTooLargeException を投げるようモックする
+        when(expenseService.search(any(), any(), any()))
+                // 外部公開して安全な文言を持つ本文サイズ超過例外を投げる
+                .thenThrow(new RequestBodyTooLargeException(ErrorMessages.PAYLOAD_TOO_LARGE));
+
+        // 一覧エンドポイントへ GET する
+        mockMvc.perform(get("/api/expenses"))
+                // ステータスが 413 であることを検証する
+                .andExpect(status().isPayloadTooLarge())
+                // 本体の status が 413 であることを検証する
+                .andExpect(jsonPath("$.status").value(413))
+                // 本体の message が送出側の安全文言であることを検証する
+                .andExpect(jsonPath("$.message").value(ErrorMessages.PAYLOAD_TOO_LARGE));
+    }
+
     // 不正な JSON ボディは 400 のまま（catch-all で 500 に退行しない）であることを検証する
     @Test
     void 不正なJSONは400のまま() throws Exception {
