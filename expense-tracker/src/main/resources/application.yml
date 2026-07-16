@@ -93,3 +93,14 @@ app:
     # デフォルト false: このヘッダはユーザーが偽装できるため、信頼できるプロキシがヘッダを制御できる
     # 環境でのみ true に変更すること。プロキシなしで true にするとレート制限が回避できてしまう。
     trust-x-forwarded-for: ${APP_RATE_LIMIT_TRUST_XFF:false}
+  # リクエスト本文サイズの上限（§9 DoS・リソース枯渇防止）に関する設定。
+  # server.tomcat.max-http-form-post-size は application/x-www-form-urlencoded・multipart の
+  # パース時にしか適用されず、本 API が実際に使う @RequestBody（生の JSON ボディ）の読み取りには
+  # 一切効かない（Spring MVC は request.getInputStream() を直接読み、Tomcat のパラメータパースを
+  # 経由しないため）。そのため上限なしで巨大な JSON ボディを送りつけられるリソース枯渇の抜け穴が
+  # 残っていた。RequestBodySizeLimitFilter がここで指定した上限を「宣言された Content-Length の事前拒否」
+  # 「Content-Length を偽る／付けない場合に備えた読み取りバイト数そのものの打ち切り」の二段構えで強制する。
+  request:
+    # 許可する本文サイズの上限（バイト）。カテゴリ名(50文字)・説明(255文字)等の最大ペイロードに
+    # 十分な余裕を持たせつつ、他の巨大ボディ対策（max-swallow-size 等）と同じ桁数に揃える。
+    max-body-size-bytes: ${APP_MAX_BODY_SIZE_BYTES:1048576}
