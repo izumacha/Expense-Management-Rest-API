@@ -25,10 +25,9 @@ import com.izumacha.expensetracker.repository.CategoryRepository;
 import com.izumacha.expensetracker.repository.ExpenseRepository;
 // Unicode 正規化（合成済み/分解済みなど見た目が同じでも符号化が異なる文字列を同一視するため）に使う
 import java.text.Normalizer;
-// 一意制約違反を検出する例外
+// 一意制約違反を検出する例外（create() の事前チェックすり抜けを捕捉する。update()/delete() は
+// RaceGuard.guarded() のラムダ内で暗黙に扱うためこのクラス自体を直接参照しない）
 import org.springframework.dao.DataIntegrityViolationException;
-// 楽観ロックの行数不一致例外。同時実行で更新/削除対象のカテゴリ自体が消えた場合に発生する
-import org.springframework.dao.OptimisticLockingFailureException;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
 // ページ指定（ページ番号・件数）を表す型
@@ -61,8 +60,8 @@ public class CategoryService {
         // 前後の空白除去とUnicode正規化を行う（create/updateで重複しないよう一元化）。
         // 実際に保存される値と重複チェックの対象を一致させるためここで明示的に揃える
         String normalizedName = normalizeName(request.name());
-        // 同名カテゴリが既に存在する場合は重複例外を投げる（409）
-        if (categoryRepository.existsByName(normalizedName)) {
+        // 同名カテゴリが既に存在する場合は重複例外を投げる（409）。大文字小文字を区別せず判定する
+        if (categoryRepository.existsByNameIgnoreCase(normalizedName)) {
             // 入力値を含めない安全な文言で重複を示す例外を送出する
             throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
         }
@@ -101,29 +100,25 @@ public class CategoryService {
                 .orElseThrow(() -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND));
         // create と同じ正規化（空白除去+Unicode正規化）。実際に保存される値で重複チェックを行うため
         String normalizedName = normalizeName(request.name());
-        // 自分自身を除いた同名カテゴリが既に存在する場合は重複例外を投げる（409）
-        if (categoryRepository.existsByNameAndIdNot(normalizedName, id)) {
+        // 自分自身を除いた同名カテゴリが既に存在する場合は重複例外を投げる（409）。大文字小文字を区別せず判定する
+        if (categoryRepository.existsByNameIgnoreCaseAndIdNot(normalizedName, id)) {
             // 入力値を含めない安全な文言で重複を示す例外を送出する
             throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
         }
         // 正規化済みの名前をエンティティへ反映する
         category.setName(normalizedName);
-        // 事前チェックをすり抜けた同時実行の重複は一意制約違反として捕捉する。
+        // 事前チェックをすり抜けた同時実行の重複・対象行消失レースを RaceGuard で検知・変換する。
         // UPDATE 文は既存の管理対象エンティティに対する save() のため、IDENTITY 採番の
         // INSERT（create）と異なり既定では即座にフラッシュされずコミット時まで遅延されうる。
         // saveAndFlush で明示的に即時反映させ、一意制約違反をこの try 内で確実に検知する。
-        try {
-            // 変更を即時反映して保存し、DTO に変換して返す
-            return CategoryResponse.from(categoryRepository.saveAndFlush(category));
-        } catch (DataIntegrityViolationException e) {
-            // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する。
-            // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
-            throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE, e);
-        } catch (OptimisticLockingFailureException e) {
-            // UPDATE の影響行数が0件だった、つまり更新対象のカテゴリ自体が同時実行で
-            // 削除されたレース。500 ではなく 404 を返す（原因例外は追跡用に連鎖させる）。
-            throw new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e);
-        }
+        return RaceGuard.guarded(
+                // 変更を即時反映して保存し、DTO に変換して返す実処理
+                () -> CategoryResponse.from(categoryRepository.saveAndFlush(category)),
+                // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する
+                e -> new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE, e),
+                // UPDATE の影響行数が0件だった、つまり更新対象のカテゴリ自体が同時実行で
+                // 削除されたレースを 404 相当の未存在例外へ変換する
+                e -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e));
     }
 
     // カテゴリを削除する（支出から参照中の場合は削除を拒否する）
@@ -138,29 +133,35 @@ public class CategoryService {
             // 内部 ID を含めない安全な文言で使用中例外を送出する
             throw new CategoryInUseException(ErrorMessages.CATEGORY_IN_USE);
         }
-        // 事前チェックをすり抜けた同時実行の参照（この間に支出が新規登録された場合）は
-        // 外部キー制約違反として捕捉する。DELETE 文も既定では即時フラッシュされないため、
-        // flush() で明示的に即時反映させてこの try 内で確実に検知する。
-        try {
-            // 参照が無ければ削除し、即時反映してから確定する
+        // 事前チェックをすり抜けた同時実行の参照（この間に支出が新規登録された場合）・
+        // 対象行消失レースを RaceGuard で検知・変換する。DELETE 文も既定では即時フラッシュ
+        // されないため、flush() で明示的に即時反映させてこの中で確実に検知する。
+        RaceGuard.guarded(() -> {
+            // 参照が無ければ削除し、即時反映してから確定する（戻り値を使わないため null を返す）
             categoryRepository.delete(category);
             categoryRepository.flush();
-        } catch (DataIntegrityViolationException e) {
-            // DB の外部キー制約違反を、入力値を含めない安全な文言で 409 相当の使用中例外へ変換する。
-            // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
-            throw new CategoryInUseException(ErrorMessages.CATEGORY_IN_USE, e);
-        } catch (OptimisticLockingFailureException e) {
-            // DELETE の影響行数が0件だった、つまり削除対象のカテゴリ自体が同時実行で
-            // 既に削除されたレース。500 ではなく 404 を返す（原因例外は追跡用に連鎖させる）。
-            throw new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e);
-        }
+            return null;
+        },
+                // DB の外部キー制約違反を、入力値を含めない安全な文言で 409 相当の使用中例外へ変換する
+                e -> new CategoryInUseException(ErrorMessages.CATEGORY_IN_USE, e),
+                // DELETE の影響行数が0件だった、つまり削除対象のカテゴリ自体が同時実行で
+                // 既に削除されたレースを 404 相当の未存在例外へ変換する
+                e -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e));
     }
 
     // カテゴリ名を正規化する（空白除去 + Unicode NFC正規化）。
     // 濁点/半濁点付き仮名などは合成済み(NFC)と分解済み(NFD)の2通りの符号化で
     // 見た目が同一の文字列を作れてしまい、strip() だけでは別名として重複チェックを
-    // すり抜けてしまう（既存の existsByName / existsByNameAndIdNot はDBの一意制約も
-    // 含め単純な文字列比較のため）。NFC に揃えることで見た目が同じ名前を確実に同一視する。
+    // すり抜けてしまう（existsByNameIgnoreCase / existsByNameIgnoreCaseAndIdNot はDBの
+    // 一意制約も含め単純な文字列比較のため）。NFC に揃えることで見た目が同じ名前を確実に同一視する。
+    // 大文字小文字の違い（"Travel"/"travel"）は existsByNameIgnoreCase 側で同一視しており、
+    // ここでは大文字小文字を変えない（保存される表示名の見た目を尊重するため）。
+    // 注: DB の一意制約(@Column(unique=true))自体は大文字小文字を区別するため、
+    // 大文字小文字だけが異なる名前が真に同時作成された場合の最終防波堤にはならない
+    // （NFC正規化はここで保存前に揃えているため一意制約が最終防波堤として機能するが、
+    // 大文字小文字はここで揃えていないため）。頻度が極めて低い理論上のレースであり、
+    // 発生しても409ではなく後勝ちで2件目が別カテゴリとして作成されるだけで実害は小さいため、
+    // MVPの割り切りとしてDB制約の変更（式インデックス等、DBプロバイダ依存になりうる）までは行わない。
     private static String normalizeName(String name) {
         // strip() で前後の空白を取り除いてから正規化する（strip() 自体はUnicode対応）
         return Normalizer.normalize(name.strip(), Normalizer.Form.NFC);
