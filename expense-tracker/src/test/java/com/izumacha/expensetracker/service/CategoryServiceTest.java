@@ -92,7 +92,7 @@ class CategoryServiceTest {
         // 作成リクエスト（食費）を用意する
         CreateCategoryRequest request = new CreateCategoryRequest("食費");
         // 同名チェックが false（重複なし）を返すようモックする
-        when(categoryRepository.existsByName("食費")).thenReturn(false);
+        when(categoryRepository.existsByNameIgnoreCase("食費")).thenReturn(false);
         // 保存時は ID 採番済みのカテゴリを返すようモックする
         when(categoryRepository.save(any(Category.class))).thenReturn(category(1L, "食費"));
 
@@ -111,7 +111,7 @@ class CategoryServiceTest {
         // 前後に空白を含む作成リクエスト（" 食費"）を用意する
         CreateCategoryRequest request = new CreateCategoryRequest(" 食費 ");
         // 正規化後の名前（"食費"）で重複チェックが false（重複なし）を返すようモックする
-        when(categoryRepository.existsByName("食費")).thenReturn(false);
+        when(categoryRepository.existsByNameIgnoreCase("食費")).thenReturn(false);
         // 保存時は正規化済み名前で採番済みのカテゴリを返すようモックする
         when(categoryRepository.save(any(Category.class))).thenReturn(category(1L, "食費"));
 
@@ -121,7 +121,7 @@ class CategoryServiceTest {
         // 返却 DTO の名前が正規化済み（空白なし）であることを検証する
         assertThat(response.name()).isEqualTo("食費");
         // 前後空白付きの生の値では重複チェックを呼んでいないことを検証する
-        verify(categoryRepository, never()).existsByName(" 食費 ");
+        verify(categoryRepository, never()).existsByNameIgnoreCase(" 食費 ");
     }
 
     // create: 濁点付き仮名の分解表現(NFD)は合成表現(NFC)へ正規化してから重複チェックすることを検証する。
@@ -137,7 +137,7 @@ class CategoryServiceTest {
         // "バス代"のNFD分解表現("\u30CF\u3099\u30B9\u4EE3")で作成リクエストを用意する
         CreateCategoryRequest request = new CreateCategoryRequest("\u30CF\u3099\u30B9\u4EE3");
         // NFC正規化後の名前("\u30D0\u30B9\u4EE3"、合成表現)で重複チェックが false(重複なし)を返すようモックする
-        when(categoryRepository.existsByName("\u30D0\u30B9\u4EE3")).thenReturn(false);
+        when(categoryRepository.existsByNameIgnoreCase("\u30D0\u30B9\u4EE3")).thenReturn(false);
         // 保存時はNFC正規化済み名前で採番済みのカテゴリを返すようモックする
         when(categoryRepository.save(any(Category.class))).thenReturn(category(1L, "\u30D0\u30B9\u4EE3"));
 
@@ -147,7 +147,7 @@ class CategoryServiceTest {
         // 返却 DTO の名前がNFC正規化済み(合成表現)であることを検証する
         assertThat(response.name()).isEqualTo("\u30D0\u30B9\u4EE3");
         // NFD分解表現の生の値では重複チェックを呼んでいないことを検証する
-        verify(categoryRepository, never()).existsByName("\u30CF\u3099\u30B9\u4EE3");
+        verify(categoryRepository, never()).existsByNameIgnoreCase("\u30CF\u3099\u30B9\u4EE3");
     }
 
     // create: 同名が既に存在すれば DuplicateException になり保存されないことを検証する
@@ -156,7 +156,7 @@ class CategoryServiceTest {
         // 作成リクエスト（食費）を用意する
         CreateCategoryRequest request = new CreateCategoryRequest("食費");
         // 同名チェックが true（重複あり）を返すようモックする
-        when(categoryRepository.existsByName("食費")).thenReturn(true);
+        when(categoryRepository.existsByNameIgnoreCase("食費")).thenReturn(true);
 
         // create 呼び出しで DuplicateException が投げられることを検証する
         assertThatThrownBy(() -> categoryService.create(request))
@@ -172,7 +172,7 @@ class CategoryServiceTest {
         // 作成リクエスト（食費）を用意する
         CreateCategoryRequest request = new CreateCategoryRequest("食費");
         // 同名チェックは false（すり抜け）を返すようモックする
-        when(categoryRepository.existsByName("食費")).thenReturn(false);
+        when(categoryRepository.existsByNameIgnoreCase("食費")).thenReturn(false);
         // 保存時に一意制約違反が起きるようモックする
         when(categoryRepository.save(any(Category.class)))
                 // DB の一意制約違反例外を投げる
@@ -221,7 +221,7 @@ class CategoryServiceTest {
         // 主キー 1 の検索で更新前カテゴリを返すようモックする
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
         // 自分以外に同名が無い（重複なし）を返すようモックする
-        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(false);
+        when(categoryRepository.existsByNameIgnoreCaseAndIdNot("交通費", 1L)).thenReturn(false);
         // 保存時（即時反映）は引数のエンティティをそのまま返すようモックする
         when(categoryRepository.saveAndFlush(any(Category.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -242,7 +242,7 @@ class CategoryServiceTest {
         // 主キー 1 の検索で更新前カテゴリを返すようモックする
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
         // 正規化後の名前（"交通費"）で重複なしを返すようモックする
-        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(false);
+        when(categoryRepository.existsByNameIgnoreCaseAndIdNot("交通費", 1L)).thenReturn(false);
         // 保存時（即時反映）は引数のエンティティをそのまま返すようモックする
         when(categoryRepository.saveAndFlush(any(Category.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -252,7 +252,7 @@ class CategoryServiceTest {
         // 返却 DTO の名前が正規化済み（空白なし）であることを検証する
         assertThat(response.name()).isEqualTo("交通費");
         // 前後空白付きの生の値では重複チェックを呼んでいないことを検証する
-        verify(categoryRepository, never()).existsByNameAndIdNot(" 交通費 ", 1L);
+        verify(categoryRepository, never()).existsByNameIgnoreCaseAndIdNot(" 交通費 ", 1L);
     }
 
     // update: 存在しない ID なら NotFoundException（404 相当）になることを検証する
@@ -277,7 +277,7 @@ class CategoryServiceTest {
         // 主キー 1 の検索で更新前カテゴリを返すようモックする
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
         // 自分以外に同名（交通費）が存在する（重複あり）を返すようモックする
-        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(true);
+        when(categoryRepository.existsByNameIgnoreCaseAndIdNot("交通費", 1L)).thenReturn(true);
 
         // update 呼び出しで DuplicateException が投げられることを検証する
         assertThatThrownBy(() -> categoryService.update(1L, new UpdateCategoryRequest("交通費")))
@@ -297,7 +297,7 @@ class CategoryServiceTest {
         // 主キー 1 の検索で更新前カテゴリを返すようモックする
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
         // 事前チェックは false（すり抜け）を返すようモックする
-        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(false);
+        when(categoryRepository.existsByNameIgnoreCaseAndIdNot("交通費", 1L)).thenReturn(false);
         // 保存時（即時反映）に一意制約違反が起きるようモックする
         when(categoryRepository.saveAndFlush(any(Category.class)))
                 // DB の一意制約違反例外を投げる
@@ -318,7 +318,7 @@ class CategoryServiceTest {
         // 主キー 1 の検索で更新前カテゴリを返すようモックする
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
         // 事前チェックは false（重複なし）を返すようモックする
-        when(categoryRepository.existsByNameAndIdNot("交通費", 1L)).thenReturn(false);
+        when(categoryRepository.existsByNameIgnoreCaseAndIdNot("交通費", 1L)).thenReturn(false);
         // 保存時に別リクエストが同じカテゴリを削除したレースを模擬して楽観ロック例外を投げさせる
         when(categoryRepository.saveAndFlush(any(Category.class)))
                 // 楽観ロックの行数不一致例外を投げる

@@ -39,9 +39,9 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 // 一覧の戻り型
 import java.util.List;
-// DB 制約違反（外部キー違反など）を表す例外。同時実行でカテゴリが消えた場合の保存失敗を捕捉する
-import org.springframework.dao.DataIntegrityViolationException;
 // 楽観ロックの行数不一致例外。同時実行で更新/削除対象の支出自体が消えた場合に発生する
+// (DataIntegrityViolationException は RaceGuard.guarded() のラムダ内で暗黙に扱うため
+// このクラス自体を直接参照しない)
 import org.springframework.dao.OptimisticLockingFailureException;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
@@ -236,24 +236,18 @@ public class ExpenseService {
         // IDENTITY 採番の INSERT のため元々即時フラッシュされるが、update() と経路を共通化している
         // 都合上、saveAndFlush で明示的に即時反映させ、両経路とも一意/外部キー制約違反をこの try 内で
         // 確実に検知する。
-        try {
-            // 保存を即時反映し、採番済み（更新時は更新後）のインスタンスを取得する
-            Expense saved = expenseRepository.saveAndFlush(expense);
-            // 保存結果を DTO に変換して返す
-            return ExpenseResponse.from(saved);
-        } catch (DataIntegrityViolationException e) {
-            // Expense の外部キーは category_id のみ。amount は @NotNull + @Digits/@DecimalMin で、
-            // spentOn は @NotNull + @PastOrPresent に加え applyFields の validateSpentOn で年範囲まで
-            // 事前検証済み（DB の date 範囲外は 400 で先に弾く）。よってこの時点で残る制約違反は
-            // 「参照先カテゴリが消えた」レースだけなので、500 ではなく 404 を返す。
-            // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
-            throw new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e);
-        } catch (OptimisticLockingFailureException e) {
-            // UPDATE の影響行数が0件だった、つまり更新対象の支出自体が同時実行で消えたレース。
-            // create() は新規 INSERT でこの経路を通らないため、update() 由来と確定できる
-            // （影響行数チェックは UPDATE/DELETE のみで起こり、INSERT では発生しない）。
-            throw new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND, e);
-        }
+        return RaceGuard.guarded(
+                // 保存を即時反映し、採番済み（更新時は更新後）のインスタンスを DTO に変換して返す実処理
+                () -> ExpenseResponse.from(expenseRepository.saveAndFlush(expense)),
+                // Expense の外部キーは category_id のみ。amount は @NotNull + @Digits/@DecimalMin で、
+                // spentOn は @NotNull + @PastOrPresent に加え applyFields の validateSpentOn で年範囲まで
+                // 事前検証済み（DB の date 範囲外は 400 で先に弾く）。よってこの時点で残る制約違反は
+                // 「参照先カテゴリが消えた」レースだけなので、500 ではなく 404 を返す
+                e -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e),
+                // UPDATE の影響行数が0件だった、つまり更新対象の支出自体が同時実行で消えたレース。
+                // create() は新規 INSERT でこの経路を通らないため、update() 由来と確定できる
+                // （影響行数チェックは UPDATE/DELETE のみで起こり、INSERT では発生しない）
+                e -> new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND, e));
     }
 
     // カテゴリを取得し、無ければ404例外を投げる
