@@ -612,6 +612,13 @@ class ExpenseServiceTest {
         assertThat(response.total().scale()).isEqualTo(2);
         // カテゴリ別の件数が 2 件であることを検証する
         assertThat(response.byCategory()).hasSize(2);
+        // 内訳側の金額も総合計と同じく常に小数2桁へ正規化されることを検証する
+        // (モックの入力は scale=0 の "1500"/"500" であり、DB の SUM 結果スケールが
+        // 保存済み金額の scale=2 と食い違う場合に total と桁数がバラつく回帰を防ぐ)
+        assertThat(response.byCategory().get(0).total()).isEqualByComparingTo("1500");
+        assertThat(response.byCategory().get(0).total().scale()).isEqualTo(2);
+        assertThat(response.byCategory().get(1).total()).isEqualByComparingTo("500");
+        assertThat(response.byCategory().get(1).total().scale()).isEqualTo(2);
     }
 
     // summary: カテゴリ別内訳は上限件数（100件・先頭ページ）で打ち切られるページ指定で問い合わせられ、

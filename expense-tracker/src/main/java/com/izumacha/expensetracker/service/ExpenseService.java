@@ -184,7 +184,15 @@ public class ExpenseService {
                 // 期間（月初〜翌月初）を渡す
                 start, end,
                 // 先頭ページ＋上限件数のページ指定で LIMIT を掛ける（並び順は JPQL 側で固定済み）
-                PageRequest.of(0, summaryMaxCategories));
+                PageRequest.of(0, summaryMaxCategories))
+                // JPQL の SUM(e.amount) は DB 側の結果スケールをそのまま返すため、保存時に
+                // 揃えている scale=2 と食い違うことがある。total と同じ正規化をここでも
+                // 適用し、byCategory[].total の小数桁を JSON レスポンス全体で一貫させる
+                .stream()
+                .map(cs -> new CategorySummary(
+                        cs.categoryId(), cs.categoryName(),
+                        cs.total().setScale(MONEY_SCALE, RoundingMode.HALF_UP)))
+                .toList();
         // 総合計は byCategory の足し上げではなく月全体の SUM クエリで求める。
         // byCategory が上限で打ち切られた場合でも、total は常に「その月のすべての支出の合計」
         // であり続け、打ち切りの影響を受けない（API 契約の意味を保つ）。
