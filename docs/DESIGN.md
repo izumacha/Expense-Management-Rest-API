@@ -78,7 +78,7 @@
 | 主張 | 一次情報 | 確認日 | 採用判断への影響 |
 |---|---|---|---|
 | Microsoft Agent 365 が2026年5月1日に一般提供（GA）開始 | [Microsoft Agent 365, now generally available — Microsoft Security Blog](https://www.microsoft.com/en-us/security/blog/2026/05/01/microsoft-agent-365-now-generally-available-expands-capabilities-and-integrations/) | 2026-07-18 | エージェントの運用・ガバナンス基盤への商用需要が実在することの裏付け。ローカル実行版の差別化余地の根拠 |
-| Semantic Kernel が Microsoft Agent Framework v1.0 としてGA（2026-04-03、AutoGenと統合） | [Microsoft Agent Framework Version 1.0 — devblogs.microsoft.com](https://devblogs.microsoft.com/agent-framework/microsoft-agent-framework-version-1-0/) | 2026-07-18 | C#でのエージェント実装基盤として、安定APIと長期サポートを備えた成熟度に達したことの根拠 |
+| Semantic Kernel が Microsoft Agent Framework v1.0 としてGA（2026年4月、AutoGenと統合） | [Microsoft Agent Framework Version 1.0 — devblogs.microsoft.com](https://devblogs.microsoft.com/agent-framework/microsoft-agent-framework-version-1-0/) | 2026-07-18 | C#でのエージェント実装基盤として、安定APIと長期サポートを備えた成熟度に達したことの根拠 |
 | ModelContextProtocol C# SDK が v1.0 に到達（2026-02-25） | [Release v1.0 of the official MCP C# SDK — .NET Blog](https://devblogs.microsoft.com/dotnet/release-v10-of-the-official-mcp-csharp-sdk/) | 2026-07-18 | MCP のホスト/クライアント実装を自前で書かず公式 SDK（Microsoft 協業）に委ねられることの根拠 |
 | Avalonia 11 が Unity / JetBrains / NASA 等に採用 | [Avalonia UI 公式サイト](https://avaloniaui.net/)（Adopters記載） | 2026-07-18 | クロスプラットフォームデスクトップUIとしての実績・成熟度の根拠 |
 | Scalar が Swagger UI の後継的立ち位置（.NET 9 以降、既定テンプレートから Swagger を除外し Scalar を推奨） | [Migrate from Swagger UI to Scalar — Scalar 公式移行ガイド](https://scalar.com/resources/migration/swagger-ui) | 2026-07-18 | 「浸透している」という主観的断定ではなく、実際のテンプレート変更・公式移行ガイドの存在を根拠に採用する |
