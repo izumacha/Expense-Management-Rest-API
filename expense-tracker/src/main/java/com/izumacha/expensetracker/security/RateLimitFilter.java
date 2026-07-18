@@ -200,8 +200,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // 引数が IPv4 または IPv6 アドレスの形式に見えるかを確認する（DNS 名前解決を行わない）。
     // 外部入力を直接渡すため ReDoS の起きないシンプルなパターンのみ使用する（§9）。
     private static boolean looksLikeIp(String candidate) {
-        // null または過剰な長さ（IPv6 最大 45 文字）は IP ではないとみなす
-        if (candidate == null || candidate.length() > 45) return false;
+        // null または過剰な長さ（IPV6_PATTERN が許容する最大 39 文字）は IP ではないとみなす
+        if (candidate == null || candidate.length() > 39) return false;
         // IPv4 形式（例: 192.168.0.1）または IPv6 形式（例: ::1、2001:db8::1）を許容する
         return IPV4_PATTERN.matcher(candidate).matches()
                 || IPV6_PATTERN.matcher(candidate).matches();
