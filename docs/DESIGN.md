@@ -15,7 +15,7 @@
 
 ### 1.1 参照したOSS（GitHubスター・実績ベース）
 
-| カテゴリ | リポジトリ | スター | 学べる点 |
+| カテゴリ | リポジトリ | スター* | 学べる点 |
 |---|---|---|---|
 | Windows生産性 | `microsoft/PowerToys` | 132k+ | プラグインアーキテクチャ、WinUI 3 + Win32相互運用、巨大OSSのモジュール分割 |
 | メディアサーバー | `jellyfin/jellyfin` | 51k+ | ASP.NET Core長期運用、プラグイン拡張、ストリーミング、認可 |
@@ -25,17 +25,23 @@
 | Clean Arch テンプレート | `ardalis/CleanArchitecture` | 18k+ | Core / UseCases / Infrastructure / Web、Ardalis.ApiEndpoints |
 | Clean Arch テンプレート | `jasontaylordev/CleanArchitecture` | 20k+ | CQRS+MediatR、AutoMapper、FluentValidation、Aspire、Scalar |
 
+\* スターは PR #1 レビュー提出時点（2026-05-18）の参考値。実装着手時に再確認すること（[PR #1 レビュー分析](./pr-1-review-analysis.md) 指摘5）。
+
 ### 1.2 抽出したベストプラクティス（採用方針）
 
 #### アーキテクチャ
 - **Clean / Onion Architecture**：依存は内側のみへ。`Domain` → `Application` → `Infrastructure` / `Presentation`
 - **CQRS + Mediator**：`MediatR` でコマンド/クエリを分離。ハンドラ単位でテスト容易化
-- **垂直スライス**：機能単位（Feature folder）で `Command` / `Handler` / `Validator` / `Endpoint` を凝集
+- **垂直スライス**：機能単位（Feature folder）で `Command` / `Handler` / `Validator` / `Endpoint` を凝集。Clean Architecture と併用するため配置ルールを固定する（詳細は Part 2.5）：
+  - `Application` は feature 単位のフォルダ（例: `Application/Agents/RunAgent`、`Application/Mcp/RegisterServer`）に分割する
+  - 各 feature フォルダに `Command` / `Query` / `Handler` / `Validator` を配置する（UseCase フォルダと Feature フォルダを混在させない）
+  - `Domain` はエンティティ・値オブジェクト・ドメインサービスのみを置く
+  - `Infrastructure` は `Application` が定義した port（interface）の実装のみを置く
 - **ドメインイベント**：副作用を疎結合化（メールやキャッシュ無効化など）
 - **ApiEndpoints**：肥大化する Controller を1リクエスト1クラスへ分解（`ardalis/ApiEndpoints`）
 
 #### コーディング・ライブラリ
-- **C# 13 / .NET 10**：primary constructors、collection expressions、`required` メンバー、Native AOT 視野
+- **C# latest / .NET 10**：`Directory.Build.props` で `LangVersion=latest` を明示し追従。primary constructors、collection expressions、`required` メンバー、Native AOT 視野
 - **`Result<T>` 型 or `OneOf`**：例外を制御フローに使わない。失敗を型で表現
 - **`FluentValidation`**：入力検証はハンドラから分離
 - **`Polly v8`**：HTTP / DBアクセスに `ResiliencePipeline`
@@ -51,7 +57,7 @@
 #### 運用
 - **.NET Aspire** でローカル開発の依存サービスをコード定義（OTel 完備）
 - **`Microsoft.Extensions.AI`**：LLMクライアントの抽象化（OpenAI / Anthropic / Ollama を差し替え）
-- **`Scalar`**：OpenAPI UI（Swagger UI の後継として浸透）
+- **`Scalar`**：OpenAPI UI（Swagger UI の後継。根拠は Part 2.1「外部根拠」参照）
 - **GitHub Actions**：`dotnet test --logger trx`、`dotnet format --verify-no-changes`、`dotnet pack` の3点セット
 
 ---
@@ -65,6 +71,18 @@
 - C# / .NET は **Semantic Kernel が Microsoft Agent Framework v1.0** として GA、**ModelContextProtocol C# SDK v1.0** も提供されており、エージェント／MCPホストとして実装するのに最も追い風が吹いている言語。
 - **Avalonia 11** は Unity / JetBrains / NASA 採用実績があり、MCP統合済み・クロスプラットフォーム（Win/macOS/Linux）。デスクトップ常駐型の AI ハブに最適。
 
+#### 外部根拠（一次情報・確認日）
+
+[PR #1 レビュー分析](./pr-1-review-analysis.md) 指摘1で要求された、上記主張に対する一次情報の裏取り。
+
+| 主張 | 一次情報 | 確認日 | 採用判断への影響 |
+|---|---|---|---|
+| Microsoft Agent 365 が2026年5月1日に一般提供（GA）開始 | [Microsoft Agent 365, now generally available — Microsoft Security Blog](https://www.microsoft.com/en-us/security/blog/2026/05/01/microsoft-agent-365-now-generally-available-expands-capabilities-and-integrations/) | 2026-07-18 | エージェントの運用・ガバナンス基盤への商用需要が実在することの裏付け。ローカル実行版の差別化余地の根拠 |
+| Semantic Kernel が Microsoft Agent Framework v1.0 としてGA（2026年4月、AutoGenと統合） | [Microsoft Agent Framework Version 1.0 — devblogs.microsoft.com](https://devblogs.microsoft.com/agent-framework/microsoft-agent-framework-version-1-0/) | 2026-07-18 | C#でのエージェント実装基盤として、安定APIと長期サポートを備えた成熟度に達したことの根拠 |
+| ModelContextProtocol C# SDK が v1.0 に到達（2026-02-25） | [Release v1.0 of the official MCP C# SDK — .NET Blog](https://devblogs.microsoft.com/dotnet/release-v10-of-the-official-mcp-csharp-sdk/) | 2026-07-18 | MCP のホスト/クライアント実装を自前で書かず公式 SDK（Microsoft 協業）に委ねられることの根拠 |
+| Avalonia 11 が Unity / JetBrains / NASA 等に採用 | [Avalonia UI 公式サイト](https://avaloniaui.net/)（Adopters記載） | 2026-07-18 | クロスプラットフォームデスクトップUIとしての実績・成熟度の根拠 |
+| Scalar が Swagger UI の後継的立ち位置（.NET 9 以降、既定テンプレートから Swagger を除外し Scalar を推奨） | [Migrate from Swagger UI to Scalar — Scalar 公式移行ガイド](https://scalar.com/resources/migration/swagger-ui) | 2026-07-18 | 「浸透している」という主観的断定ではなく、実際のテンプレート変更・公式移行ガイドの存在を根拠に採用する |
+
 ### 2.2 ターゲットユーザーと価値
 
 | ユーザー | 課題 | AgentForgeの価値 |
@@ -75,12 +93,22 @@
 
 ### 2.3 主要機能（MVP範囲）
 
-1. **Agent Designer**：YAMLまたは GUI でエージェント（モデル・プロンプト・許可ツール）を定義
-2. **MCP クライアントハブ**：複数の MCP サーバー（stdio / HTTP）を一元接続・ツールを横断利用
-3. **Run コンソール**：エージェント実行をストリーミング表示、ツール呼び出しを階層ツリーで可視化
-4. **Trace Viewer**：OpenTelemetry トレースを取り込み、レイテンシ・コスト・失敗を可視化
-5. **Provider 切替**：OpenAI / Anthropic / Azure OpenAI / Ollama（ローカル）を統一抽象で切替
-6. **シークレット保管**：OSキーチェーン（DPAPI / macOS Keychain / libsecret）を `Microsoft.Extensions.Configuration` プロバイダ化
+初回実装が重すぎて設計書だけが残ることを避けるため、[PR #1 レビュー分析](./pr-1-review-analysis.md) 指摘4に従い MVP を2段階に分割する。
+
+#### MVP 1（初回実装スコープ）
+
+1. **Agent Designer（YAML版のみ）**：YAML でエージェント（モデル・プロンプト・許可ツール）を定義（GUI版はMVP 2）
+2. **Provider は1つのみ**：OpenAI または Ollama のいずれか一方（Anthropic / Azure OpenAI はMVP 2）
+3. **MCP stdio 1サーバー**：複数サーバー対応・HTTP transportはMVP 2に先送り
+4. **実行ログの画面表示**：ストリーミング表示・階層ツリー可視化はMVP 2（まずは逐次ログ表示）
+5. **Run履歴をSQLiteに保存**：Trace Viewer（OpenTelemetry取り込み）はMVP 2
+
+#### MVP 2（拡張スコープ）
+
+1. **Provider 切替**：OpenAI / Anthropic / Azure OpenAI / Ollama を統一抽象で切替可能にする
+2. **Trace Viewer**：OpenTelemetry トレースを取り込み、レイテンシ・コスト・失敗を可視化
+3. **複数 MCP サーバー**：stdio / HTTP を一元接続・ツールを横断利用（MCP クライアントハブ化）
+4. **シークレット保管**：OSキーチェーン（DPAPI / macOS Keychain / libsecret）を `Microsoft.Extensions.Configuration` プロバイダ化
 
 ### 2.4 ターゲットプラットフォーム
 
@@ -117,6 +145,8 @@ AgentForge.sln
     ├── DESIGN.md                       # 本ドキュメント
     └── adr/                            # Architecture Decision Records
 ```
+
+**配置ルール**（Part 1.2 の垂直スライス方針を本構成に適用）：`AgentForge.Application` 配下は feature 単位のフォルダ（例: `Application/Agents/RunAgent/`、`Application/Mcp/RegisterServer/`）に分割し、各フォルダに `Command`/`Query`/`Handler`/`Validator` を凝集させる。`AgentForge.Domain` はエンティティ・値オブジェクト・ドメインサービスのみ、`AgentForge.Infrastructure` は `Application` が定義した port の実装のみを置き、Application 配下に UseCase フォルダと Feature フォルダを混在させない。
 
 ### 2.6 技術選定
 
