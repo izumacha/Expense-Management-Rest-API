@@ -15,6 +15,8 @@ import com.izumacha.expensetracker.dto.response.PageResponse;
 import com.izumacha.expensetracker.exception.CategoryInUseException;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
+// 不正リクエスト例外を参照する（NFC 正規化後の文字数超過が 400 になることの検証に使う）
+import com.izumacha.expensetracker.exception.InvalidRequestException;
 // 未存在例外を参照する
 import com.izumacha.expensetracker.exception.NotFoundException;
 // カテゴリリポジトリを参照する
@@ -148,6 +150,47 @@ class CategoryServiceTest {
         assertThat(response.name()).isEqualTo("\u30D0\u30B9\u4EE3");
         // NFD分解表現の生の値では重複チェックを呼んでいないことを検証する
         verify(categoryRepository, never()).existsByNameIgnoreCase("\u30CF\u3099\u30B9\u4EE3");
+    }
+
+    // create: NFC 正規化で文字数が増えて上限を超える名前は InvalidRequestException（400 相当）に
+    // なることを検証する。"\u0958"（デーヴァナーガリー文字 QA、合成済み1文字）は合成除外文字で、
+    // NFC 正規化しても "\u0915"（KA）+"\u093C"（ヌクタ、結合文字）の 2 文字に分解されたままになる
+    // ため、正規化前 50 文字 → 正規化後 100 文字となり varchar(50) に収まらない。
+    // この超過を DB まで持ち込むと制約違反経由で誤って 409（重複）になってしまうため、
+    // 保存前に 400 として拒否されること（DuplicateException ではないこと）を確認する。
+    // コード中は Unicode コードポイントのエスケープ表記で明示する（テストが実際に合成済み
+    // 1 文字の入力を使っていることをソースコード上で保証するため。上の NFD テストと同じ方針）
+    @Test
+    void create_NFC正規化後に50文字を超える名前は400例外() {
+        // 正規化前はちょうど 50 文字（正規化後は 100 文字）になる名前で作成リクエストを用意する
+        CreateCategoryRequest request = new CreateCategoryRequest("\u0958".repeat(50));
+
+        // create 呼び出しで InvalidRequestException（400 相当）が投げられることを検証する
+        assertThatThrownBy(() -> categoryService.create(request))
+                // 例外型が InvalidRequestException であることを確認する（409 の重複例外ではない）
+                .isInstanceOf(InvalidRequestException.class);
+        // 保存が一度も呼ばれていないことを検証する
+        verify(categoryRepository, never()).save(any());
+    }
+
+    // create: NFC 正規化しても文字数が変わらない、ちょうど上限（50 文字）の名前は
+    // 通常どおり保存されることを検証する（境界値。上限ぴったりまでは 400 にならない）
+    @Test
+    void create_ちょうど50文字の名前は保存して返す() {
+        // NFC 正規化で長さが変わらない "あ" を 50 回繰り返した境界値の名前を用意する
+        String maxLengthName = "あ".repeat(50);
+        // 上限ちょうどの名前で作成リクエストを用意する
+        CreateCategoryRequest request = new CreateCategoryRequest(maxLengthName);
+        // 同名チェックが false（重複なし）を返すようモックする
+        when(categoryRepository.existsByNameIgnoreCase(maxLengthName)).thenReturn(false);
+        // 保存時は ID 採番済みのカテゴリを返すようモックする
+        when(categoryRepository.save(any(Category.class))).thenReturn(category(1L, maxLengthName));
+
+        // テスト対象の create を呼び出す
+        CategoryResponse response = categoryService.create(request);
+
+        // 返却 DTO の名前が上限ちょうどの名前のままであることを検証する
+        assertThat(response.name()).isEqualTo(maxLengthName);
     }
 
     // create: 同名が既に存在すれば DuplicateException になり保存されないことを検証する

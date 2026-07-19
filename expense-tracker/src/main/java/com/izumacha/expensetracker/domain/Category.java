@@ -34,14 +34,18 @@ import lombok.Setter;
 @NoArgsConstructor
 public class Category {
 
+    // カテゴリ名の最大文字数（DB の列長・DTO の @Size・サービス層の正規化後再検証で共有する唯一の定義。
+    // 裸の 50 を各所に散らさないよう、列長を持つドメイン側にまとめて置く。共通規約 §6 一元管理）
+    public static final int NAME_MAX_LENGTH = 50;
+
     // 主キー（自動採番）
     @Id
     // DB の ID 列で自動採番する
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // カテゴリ名（必須・一意・最大50文字）
-    @Column(nullable = false, unique = true, length = 50)
+    // カテゴリ名（必須・一意・最大50文字。長さは上の定数を参照して一元管理する）
+    @Column(nullable = false, unique = true, length = NAME_MAX_LENGTH)
     private String name;
 
     // カテゴリ名を受け取るコンストラクタ
