@@ -1,6 +1,9 @@
 // 例外パッケージ
 package com.izumacha.expensetracker.exception;
 
+// カテゴリ名の最大文字数定数（Category.NAME_MAX_LENGTH）を文言へ埋め込むために参照する
+import com.izumacha.expensetracker.domain.Category;
+
 // 外部へ返すエラーメッセージを一元管理する定数クラス（§6 一元管理 / §9 内部情報を漏らさない）
 public final class ErrorMessages {
 
@@ -16,6 +19,11 @@ public final class ErrorMessages {
 
     // 同名カテゴリが既に存在するときの安全な文言（入力値は含めない）
     public static final String CATEGORY_NAME_DUPLICATE = "指定された名前のカテゴリは既に存在します";
+
+    // カテゴリ名が保存可能な最大文字数を超えたときの安全な文言（入力値は含めない。
+    // 上限値は Category.NAME_MAX_LENGTH を参照して一元管理し、裸の数値を書かない）
+    public static final String CATEGORY_NAME_TOO_LONG =
+            "カテゴリ名は" + Category.NAME_MAX_LENGTH + "文字以内で指定してください";
 
     // 支出から参照中のカテゴリを削除しようとしたときの安全な文言（内部 ID は含めない）
     public static final String CATEGORY_IN_USE = "このカテゴリは支出で使用されているため削除できません";

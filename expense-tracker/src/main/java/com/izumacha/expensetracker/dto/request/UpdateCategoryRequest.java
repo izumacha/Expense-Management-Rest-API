@@ -1,6 +1,8 @@
 // リクエスト DTO のパッケージ
 package com.izumacha.expensetracker.dto.request;
 
+// カテゴリ名の最大文字数定数（Category.NAME_MAX_LENGTH）を参照する
+import com.izumacha.expensetracker.domain.Category;
 // 空文字を禁止するバリデーション
 import jakarta.validation.constraints.NotBlank;
 // 文字数を制限するバリデーション
@@ -13,8 +15,8 @@ public record UpdateCategoryRequest(
 
         // カテゴリ名（必須・最大50文字）
         @NotBlank(message = "must not be blank")
-        // 最大50文字までに制限する
-        @Size(max = 50, message = "must be at most 50 characters")
+        // 最大文字数までに制限する（上限値はドメイン側の定数を参照し、{max} で文言へ埋め込む）
+        @Size(max = Category.NAME_MAX_LENGTH, message = "must be at most {max} characters")
         String name
 ) {
     // 正規コンストラクタで @NotBlank より先に正規化する（CreateCategoryRequest と同じ理由）。
