@@ -49,13 +49,13 @@
 | 2.2 | CI が Java を未検証 | **解消済み** | `.github/workflows/ci.yml` に `java-build-test` ジョブ（`./mvnw -B verify`）が追加済み |
 | 2.3 | `ddl-auto: update` の運用使用 | **一部解消（既定値は据え置き）** | `application.yml` が `${SPRING_JPA_HIBERNATE_DDL_AUTO:update}` として環境変数で `validate` 等へ上書き可能にはなったが、既定値自体は引き続き `update` |
 | 2.4 | `amount` の上限検証がない | **解消済み** | `CreateExpenseRequest` に `@Digits(integer = 17, fraction = 2)` を追加 |
-| 2.5 | `@PastOrPresent` の TZ 依存 | **未検証・据え置き** | 今回の再検証範囲では変更を確認できず。優先度は引き続き低 |
+| 2.5 | `@PastOrPresent` の TZ 依存 | **解消済み** | `config/TimeZoneConfig.java` が `@PostConstruct` で JVM 既定タイムゾーンを起動時に `Asia/Tokyo` へ固定し、`@PastOrPresent`（`Clock.systemDefaultZone()` 依存）がコンテナの実行環境 TZ に左右されないようにした。`TimeZoneConfigTest` で回帰テスト済み |
 | 2.6 | カテゴリ更新・削除 API 不在 | **解消済み** | `CategoryController` に `PUT /api/categories/{id}`・`DELETE /api/categories/{id}` を追加（使用中カテゴリの削除は `CategoryInUseException` で 409） |
 
 **再評価後の重大度サマリ**: 当初の「重大 3 件」のうち 2 件（Java テスト皆無・CI 未検証）は解消済みで、
 残る「認証・認可の欠如」は `SecurityConfig.java` に明記された意図的な MVP スコープ判断であり、
 本番移行前に必ず対応すべき唯一の残課題として位置付けを変更する。「高 4 件」はすべて解消済み。
-「中 4 件」は 3 件解消・1 件（`ddl-auto` 既定値）一部解消。「低 3 件」は 2 件解消・1 件未検証のまま。
+「中 4 件」は 3 件解消・1 件（`ddl-auto` 既定値）一部解消。「低 3 件」はすべて解消済み。
 
 ---
 
