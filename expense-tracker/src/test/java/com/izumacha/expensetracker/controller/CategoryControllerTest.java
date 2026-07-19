@@ -328,7 +328,7 @@ class CategoryControllerTest {
                 .andExpect(jsonPath("$.status").value(400));
     }
 
-    // PUT: 名前が 50 文字超なら検証で 400 になることを検証する（更新経路でも @Size が効くことを確認）
+    // PUT: 名前が 50 文字超なら検証で 400 になることを検証する（更新経路でも @MaxCodePoints が効くことを確認）
     @Test
     void カテゴリ更新_長すぎる名前は400() throws Exception {
         // 51 文字の名前を作る（"あ" を 51 回繰り返す）

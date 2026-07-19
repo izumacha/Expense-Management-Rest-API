@@ -25,7 +25,7 @@ public record UpdateCategoryRequest(
     // Bean Validation の @NotBlank は ASCII 空白のみを trim() で除去するため、全角スペース
     // （U+3000）等の Unicode 空白だけの値は「空白でない」と誤判定されてしまう。ここで
     // strip()（Unicode 対応）しておくことで、実際に永続化される値と同じ文字列を
-    // @NotBlank / @Size が検証できるようにする。
+    // @NotBlank / @MaxCodePoints が検証できるようにする。
     public UpdateCategoryRequest {
         // null はそのまま維持し、非 null なら前後の空白（Unicode 対応）を取り除く
         name = (name == null) ? null : name.strip();
