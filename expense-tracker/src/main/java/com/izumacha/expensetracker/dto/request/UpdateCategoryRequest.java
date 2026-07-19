@@ -5,8 +5,10 @@ package com.izumacha.expensetracker.dto.request;
 import com.izumacha.expensetracker.domain.Category;
 // 空文字を禁止するバリデーション
 import jakarta.validation.constraints.NotBlank;
-// 文字数を制限するバリデーション
-import jakarta.validation.constraints.Size;
+// コードポイント数で文字数を制限するバリデーション（標準の @Size は UTF-16 コード単位数で
+// 数えるため、絵文字等のサロゲートペア文字が2とカウントされ DB の varchar(n) の実際の基準
+// （コードポイント基準）とずれる。MaxCodePoints.java の Javadoc を参照）
+import com.izumacha.expensetracker.validation.MaxCodePoints;
 
 // カテゴリ更新リクエストを表す record（作成リクエストと API 契約を明示的に分離する。
 // UpdateExpenseRequest と同様、現時点では CreateCategoryRequest と同じフィールド構成だが、
@@ -16,7 +18,7 @@ public record UpdateCategoryRequest(
         // カテゴリ名（必須・最大50文字）
         @NotBlank(message = "must not be blank")
         // 最大文字数までに制限する（上限値はドメイン側の定数を参照し、{max} で文言へ埋め込む）
-        @Size(max = Category.NAME_MAX_LENGTH, message = "must be at most {max} characters")
+        @MaxCodePoints(max = Category.NAME_MAX_LENGTH, message = "must be at most {max} characters")
         String name
 ) {
     // 正規コンストラクタで @NotBlank より先に正規化する（CreateCategoryRequest と同じ理由）。
