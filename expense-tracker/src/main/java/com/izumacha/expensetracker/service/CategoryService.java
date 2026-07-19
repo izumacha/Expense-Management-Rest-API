@@ -168,13 +168,17 @@ public class CategoryService {
         // strip() で前後の空白を取り除いてから正規化する（strip() 自体はUnicode対応）
         String normalized = Normalizer.normalize(name.strip(), Normalizer.Form.NFC);
         // NFC 正規化は文字数を増やすことがある（合成除外文字。例: U+0958 は NFC でも
-        // U+0915+U+093C の 2 文字に分解されたままになる）ため、DTO の @Size(max=50) を
+        // U+0915+U+093C の 2 文字に分解されたままになる）ため、DTO の @MaxCodePoints(max=50) を
         // 正規化前の値で通過した名前が、ここで 50 文字を超えてしまう場合がある。
         // そのまま保存すると varchar(50) 超過の DataIntegrityViolationException となり、
         // create/update の catch が一意制約違反と区別できず誤って 409（重複）として
         // 返してしまうため、正規化後の長さをここで再検証して 400（不正入力）で拒否する
         // （create と update の両方がこのメソッドを通るため、両経路を一括で防げる）。
-        if (normalized.length() > Category.NAME_MAX_LENGTH) {
+        // 長さは PostgreSQL の varchar(n) と同じコードポイント基準で数える（UTF-16 コード単位数の
+        // String#length() を使うと、絵文字等のサロゲートペア文字を 2 と数えてしまい、DB には
+        // 収まる名前を誤って拒否しうる。DTO 側の @MaxCodePoints と基準を揃えるため、ここでも
+        // codePointCount を使う）。
+        if (normalized.codePointCount(0, normalized.length()) > Category.NAME_MAX_LENGTH) {
             // 入力値を含めない安全な文言で 400 相当の不正リクエスト例外を送出する
             throw new InvalidRequestException(ErrorMessages.CATEGORY_NAME_TOO_LONG);
         }

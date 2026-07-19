@@ -193,6 +193,32 @@ class CategoryServiceTest {
         assertThat(response.name()).isEqualTo(maxLengthName);
     }
 
+    // create: 基本多言語面(BMP)外の文字（サロゲートペア）を含む、ちょうど50コードポイントの
+    // 名前は保存されることを検証する（境界値）。U+1F600（😀 GRINNING FACE）は Java の
+    // String 内部表現では UTF-16 サロゲートペア2コード単位を要するため、String#length() で
+    // 数えると 100（上限50を超過）になってしまうが、実際の文字数（コードポイント数）は50で
+    // あり、PostgreSQL の varchar(50) にも収まる。normalizeName の再検証が
+    // codePointCount（コードポイント基準）で数えていることを、この境界値で確認する。
+    @Test
+    void create_サロゲートペア文字がちょうど50コードポイントの名前は保存して返す() {
+        // U+1F600 を50回繰り返した名前を用意する（コードポイント数50、UTF-16コード単位数100）
+        String emojiName = "😀".repeat(50);
+        // コードポイント数がちょうど50であることを前提として組み立てていることを自己検証する
+        assertThat(emojiName.codePointCount(0, emojiName.length())).isEqualTo(50);
+        // 上限ちょうどの名前で作成リクエストを用意する
+        CreateCategoryRequest request = new CreateCategoryRequest(emojiName);
+        // 同名チェックが false（重複なし）を返すようモックする
+        when(categoryRepository.existsByNameIgnoreCase(emojiName)).thenReturn(false);
+        // 保存時は ID 採番済みのカテゴリを返すようモックする
+        when(categoryRepository.save(any(Category.class))).thenReturn(category(1L, emojiName));
+
+        // テスト対象の create を呼び出す（400 にならず正常に保存されることを検証する）
+        CategoryResponse response = categoryService.create(request);
+
+        // 返却 DTO の名前が絵文字混じりの名前のままであることを検証する
+        assertThat(response.name()).isEqualTo(emojiName);
+    }
+
     // create: 同名が既に存在すれば DuplicateException になり保存されないことを検証する
     @Test
     void create_事前チェックで重複なら409例外() {

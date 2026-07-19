@@ -153,6 +153,30 @@ class CategoryControllerTest {
                 .andExpect(status().isBadRequest());
     }
 
+    // POST: 基本多言語面(BMP)外の文字（絵文字などのサロゲートペア）を含む名前でも、
+    // コードポイント数が上限(50)以内なら DTO 検証で弾かれず 201 になることを検証する。
+    // 標準の @Size（UTF-16 コード単位数で数える）のままだと、この名前は
+    // codePointCount=50・length()=100 となり誤って 400 になっていた（@MaxCodePoints への
+    // 変更で修正した回帰を防ぐテスト）。
+    @Test
+    void カテゴリ作成_絵文字がちょうど50コードポイントなら201() throws Exception {
+        // U+1F600（😀）を50回繰り返した名前を用意する（コードポイント数50、UTF-16コード単位数100）
+        String emojiName = "😀".repeat(50);
+        // サービスが返す DTO を用意する（DTO 検証を通過したことの確認が主目的のため中身は簡略化）
+        when(categoryService.create(any()))
+                // ID 採番済みのカテゴリ DTO を返す
+                .thenReturn(new CategoryResponse(1L, emojiName));
+
+        // 絵文字混じりの名前で POST する
+        mockMvc.perform(post("/api/categories")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 50コードポイントの絵文字名を持つ本体を渡す
+                        .content("{\"name\":\"" + emojiName + "\"}"))
+                // DTO 検証で弾かれず 201 になることを検証する（400 ではない）
+                .andExpect(status().isCreated());
+    }
+
     // POST: サービスが重複例外を投げると 409 になることを検証する
     @Test
     void カテゴリ作成_重複は409() throws Exception {
@@ -304,7 +328,7 @@ class CategoryControllerTest {
                 .andExpect(jsonPath("$.status").value(400));
     }
 
-    // PUT: 名前が 50 文字超なら検証で 400 になることを検証する（更新経路でも @Size が効くことを確認）
+    // PUT: 名前が 50 文字超なら検証で 400 になることを検証する（更新経路でも @MaxCodePoints が効くことを確認）
     @Test
     void カテゴリ更新_長すぎる名前は400() throws Exception {
         // 51 文字の名前を作る（"あ" を 51 回繰り返す）

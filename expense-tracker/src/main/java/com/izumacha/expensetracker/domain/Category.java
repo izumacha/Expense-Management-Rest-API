@@ -34,7 +34,7 @@ import lombok.Setter;
 @NoArgsConstructor
 public class Category {
 
-    // カテゴリ名の最大文字数（DB の列長・DTO の @Size・サービス層の正規化後再検証で共有する唯一の定義。
+    // カテゴリ名の最大文字数（DB の列長・DTO の @MaxCodePoints・サービス層の正規化後再検証で共有する唯一の定義。
     // 裸の 50 を各所に散らさないよう、列長を持つドメイン側にまとめて置く。共通規約 §6 一元管理）
     public static final int NAME_MAX_LENGTH = 50;
 
