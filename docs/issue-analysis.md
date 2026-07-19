@@ -28,6 +28,35 @@
 各所見には根拠ファイルと、リポジトリ規約 `CLAUDE.md` の該当節（§8 パフォーマンス、§9 セキュリティ、
 §11 テスト、§14 CI）を併記する。
 
+## 現状ステータス（2026-07-19 再検証）
+
+本分析（2026-06-09時点）から約1か月半が経過し、その間の一連の修正 PR（#37〜#46 ほか）で大半の所見が
+解消済みであることを、実際のコード読み合わせと `./mvnw test` 実行（DB 依存の `*RepositoryTest` を除く）
+の両方で確認した。**以下の一覧は原文の所見を書き換えず、現状ステータスを追記するものである**
+（元の分析日時点の記録として §1・§2 本文は保持する）。
+
+| # | 所見 | 現状 | 根拠 |
+|---|---|---|---|
+| 1.1 | 認証・認可が一切ない | **意図的スコープ外（未解消）** | `config/SecurityConfig.java` が `permitAll()` を維持しつつ、Javadoc で「MVP フェーズの明示的な設計判断」であることと本番移行時の対応手順（JWT/OAuth2・ロール認可・CORS・CSRF 再評価）を明記 |
+| 1.2 | レート制限・サイズ上限・タイムアウトがない | **解消済み** | `security/RateLimitFilter.java`（IP 単位・ウィンドウ制限）、`RequestBodySizeLimitFilter`（本文サイズ上限＋413）、`application.yml` の `server.tomcat.connection-timeout`/`max-swallow-size` |
+| 1.3 | 一覧 API に上限・ページネーションがない | **解消済み** | `CategoryController`/`ExpenseController` が `Pageable` + `PageableSanitizer`（sort 固定・page 上限）を使用、`application.yml` の `spring.data.web.pageable.max-page-size: 100` |
+| 1.4 | 汎用例外ハンドラがない | **解消済み** | `GlobalExceptionHandler` が `Exception`/`DataAccessException`/`MissingServletRequestParameterException`/`MethodArgumentTypeMismatchException`/`NoHandlerFoundException` を含め網羅的に `{status, message}` へ整形 |
+| 1.5 | DB 認証情報のハードコード既定値 | **解消済み** | `application.yml` の `password: ${SPRING_DATASOURCE_PASSWORD}`（既定値なし＝未設定で起動失敗）。`docker-compose.yml` も `${SPRING_DATASOURCE_PASSWORD:?...}` で同様に fail-closed |
+| 1.6 | Docker root 実行 | **解消済み** | `Dockerfile` の実行ステージで `app` ユーザーを作成し `USER app` で非 root 実行 |
+| 1.7 | エラーメッセージの内部 ID 露出 | **解消済み** | `ExpenseService`/`CategoryService` の `NotFoundException` はすべて `ErrorMessages.CATEGORY_NOT_FOUND`/`EXPENSE_NOT_FOUND` の定型文言のみを使用し、ID を文字列連結していない |
+| 1.8 | DB ポートのホスト公開 | **解消済み** | `docker-compose.yml` の `db` サービスが `127.0.0.1:5432:5432`（ループバック限定）に変更済み |
+| 2.1 | Java 側テストが皆無 | **解消済み** | `expense-tracker/src/test/java` 配下に Controller/Service/Repository/Exception 各層のテストが多数追加され、`./mvnw test` で全パス |
+| 2.2 | CI が Java を未検証 | **解消済み** | `.github/workflows/ci.yml` に `java-build-test` ジョブ（`./mvnw -B verify`）が追加済み |
+| 2.3 | `ddl-auto: update` の運用使用 | **一部解消（既定値は据え置き）** | `application.yml` が `${SPRING_JPA_HIBERNATE_DDL_AUTO:update}` として環境変数で `validate` 等へ上書き可能にはなったが、既定値自体は引き続き `update` |
+| 2.4 | `amount` の上限検証がない | **解消済み** | `CreateExpenseRequest` に `@Digits(integer = 17, fraction = 2)` を追加 |
+| 2.5 | `@PastOrPresent` の TZ 依存 | **解消済み** | `config/TimeZoneConfig.java` が `@PostConstruct` で JVM 既定タイムゾーンを起動時に `Asia/Tokyo` へ固定し、`@PastOrPresent`（`Clock.systemDefaultZone()` 依存）がコンテナの実行環境 TZ に左右されないようにした。`TimeZoneConfigTest` で回帰テスト済み |
+| 2.6 | カテゴリ更新・削除 API 不在 | **解消済み** | `CategoryController` に `PUT /api/categories/{id}`・`DELETE /api/categories/{id}` を追加（使用中カテゴリの削除は `CategoryInUseException` で 409） |
+
+**再評価後の重大度サマリ**: 当初の「重大 3 件」のうち 2 件（Java テスト皆無・CI 未検証）は解消済みで、
+残る「認証・認可の欠如」は `SecurityConfig.java` に明記された意図的な MVP スコープ判断であり、
+本番移行前に必ず対応すべき唯一の残課題として位置付けを変更する。「高 4 件」はすべて解消済み。
+「中 4 件」は 3 件解消・1 件（`ddl-auto` 既定値）一部解消。「低 3 件」はすべて解消済み。
+
 ---
 
 ## 1. セキュリティ面の課題
