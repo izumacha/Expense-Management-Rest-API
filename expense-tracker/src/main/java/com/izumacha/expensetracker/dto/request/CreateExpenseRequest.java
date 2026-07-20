@@ -9,12 +9,12 @@ import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
 // 過去または当日であることを検証するバリデーション
 import jakarta.validation.constraints.PastOrPresent;
-// 文字数を制限するバリデーション
-import jakarta.validation.constraints.Size;
 // 10進数の金額型
 import java.math.BigDecimal;
 // 日付型
 import java.time.LocalDate;
+// 文字数をコードポイント単位で制限するバリデーション（DB varchar 列の基準に合わせる）
+import com.izumacha.expensetracker.validation.MaxCodePoints;
 
 // 支出作成・更新リクエストを表す record
 public record CreateExpenseRequest(
@@ -31,8 +31,8 @@ public record CreateExpenseRequest(
         @NotNull(message = "must not be null")
         Long categoryId,
 
-        // 説明（任意・最大255文字）
-        @Size(max = 255, message = "must be at most 255 characters")
+        // 説明（任意・最大255文字。サロゲートペア文字でも DB の varchar(255) と基準を合わせるためコードポイント単位で検証する）
+        @MaxCodePoints(max = 255, message = "must be at most 255 characters")
         String description,
 
         // 支出日（必須・未来日不可）
