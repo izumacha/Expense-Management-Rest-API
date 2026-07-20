@@ -21,13 +21,12 @@ public record UpdateCategoryRequest(
         @MaxCodePoints(max = Category.NAME_MAX_LENGTH, message = "must be at most {max} characters")
         String name
 ) {
-    // 正規コンストラクタで @NotBlank より先に正規化する（CreateCategoryRequest と同じ理由）。
-    // Bean Validation の @NotBlank は ASCII 空白のみを trim() で除去するため、全角スペース
-    // （U+3000）等の Unicode 空白だけの値は「空白でない」と誤判定されてしまう。ここで
-    // strip()（Unicode 対応）しておくことで、実際に永続化される値と同じ文字列を
-    // @NotBlank / @MaxCodePoints が検証できるようにする。
+    // 正規コンストラクタで @NotBlank / @MaxCodePoints より先に正規化する
+    // （CreateCategoryRequest と同じ理由。詳細はそちらのコメントおよび CategoryNameNormalizer の
+    // Javadoc を参照）。strip() による Unicode 空白除去と NFC 正規化の両方を行うことで、
+    // 実際に永続化される値と同じ文字列を @NotBlank / @MaxCodePoints が検証できるようにする。
     public UpdateCategoryRequest {
-        // null はそのまま維持し、非 null なら前後の空白（Unicode 対応）を取り除く
-        name = (name == null) ? null : name.strip();
+        // null はそのまま維持し、非 null なら前後の空白除去 + NFC 正規化を行う
+        name = CategoryNameNormalizer.normalize(name);
     }
 }

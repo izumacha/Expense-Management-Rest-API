@@ -19,12 +19,18 @@ public record CreateCategoryRequest(
         @MaxCodePoints(max = Category.NAME_MAX_LENGTH, message = "must be at most {max} characters")
         String name
 ) {
-    // 正規コンストラクタで @NotBlank より先に正規化する。Bean Validation の @NotBlank は
-    // ASCII 空白のみを trim() で除去するため、全角スペース（U+3000）等の Unicode 空白だけの
-    // 値は「空白でない」と誤判定されてしまう。ここで strip()（Unicode 対応）しておくことで、
-    // 実際に永続化される値と同じ文字列を @NotBlank / @MaxCodePoints が検証できるようにする。
+    // 正規コンストラクタで @NotBlank / @MaxCodePoints より先に正規化する。
+    // 1. Bean Validation の @NotBlank は ASCII 空白のみを trim() で除去するため、全角スペース
+    //    （U+3000）等の Unicode 空白だけの値は「空白でない」と誤判定されてしまう。
+    // 2. NFD 分解済み表現（濁点付き仮名等が基底文字＋結合文字の複数コードポイントに分解された
+    //    表現）は NFC 合成表現よりコードポイント数が多くなりやすいため、正規化前の生入力のまま
+    //    @MaxCodePoints を検証すると、NFC 合成後は上限内に収まるはずの名前を誤って 400 で
+    //    拒否してしまう（サービス層の CategoryService.normalizeName() が防いでいたのは
+    //    「正規化で伸びて上限を超える」逆方向のケースのみで、この方向は未対応だった）。
+    // どちらも CategoryNameNormalizer（strip + NFC 正規化）で解決し、実際に永続化される値と
+    // 同じ文字列を @NotBlank / @MaxCodePoints が検証できるようにする。
     public CreateCategoryRequest {
-        // null はそのまま維持し、非 null なら前後の空白（Unicode 対応）を取り除く
-        name = (name == null) ? null : name.strip();
+        // null はそのまま維持し、非 null なら前後の空白除去 + NFC 正規化を行う
+        name = CategoryNameNormalizer.normalize(name);
     }
 }

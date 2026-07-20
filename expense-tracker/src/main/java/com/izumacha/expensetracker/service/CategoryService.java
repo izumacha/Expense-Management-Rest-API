@@ -7,6 +7,8 @@ import com.izumacha.expensetracker.domain.Category;
 import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
 // カテゴリ更新リクエスト DTO を参照する（作成と更新の API 契約を分離する）
 import com.izumacha.expensetracker.dto.request.UpdateCategoryRequest;
+// カテゴリ名の正規化（前後空白除去 + NFC正規化）を DTO 層と共有するためのユーティリティを参照する
+import com.izumacha.expensetracker.dto.request.CategoryNameNormalizer;
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
 // ページ形式の返却 DTO を参照する
@@ -25,8 +27,6 @@ import com.izumacha.expensetracker.exception.NotFoundException;
 import com.izumacha.expensetracker.repository.CategoryRepository;
 // 支出リポジトリを参照する（削除時にカテゴリが支出から使用中か確認するため）
 import com.izumacha.expensetracker.repository.ExpenseRepository;
-// Unicode 正規化（合成済み/分解済みなど見た目が同じでも符号化が異なる文字列を同一視するため）に使う
-import java.text.Normalizer;
 // 一意制約違反を検出する例外（create() の事前チェックすり抜けを捕捉する。update()/delete() は
 // RaceGuard.guarded() のラムダ内で暗黙に扱うためこのクラス自体を直接参照しない）
 import org.springframework.dao.DataIntegrityViolationException;
@@ -165,8 +165,11 @@ public class CategoryService {
     // 発生しても409ではなく後勝ちで2件目が別カテゴリとして作成されるだけで実害は小さいため、
     // MVPの割り切りとしてDB制約の変更（式インデックス等、DBプロバイダ依存になりうる）までは行わない。
     private static String normalizeName(String name) {
-        // strip() で前後の空白を取り除いてから正規化する（strip() 自体はUnicode対応）
-        String normalized = Normalizer.normalize(name.strip(), Normalizer.Form.NFC);
+        // strip() + NFC正規化はDTOの正規コンストラクタと共有のロジック（CategoryNameNormalizer）で
+        // 行う。CreateCategoryRequest/UpdateCategoryRequest 経由なら既に正規化済みだが、
+        // DTOのBean Validationを経由しない直接呼び出し（テスト等）でも同じ結果になるよう
+        // ここでも同じユーティリティを通す（べき等なので二重に通しても結果は変わらない）
+        String normalized = CategoryNameNormalizer.normalize(name);
         // NFC 正規化は文字数を増やすことがある（合成除外文字。例: U+0958 は NFC でも
         // U+0915+U+093C の 2 文字に分解されたままになる）ため、DTO の @MaxCodePoints(max=50) を
         // 正規化前の値で通過した名前が、ここで 50 文字を超えてしまう場合がある。
