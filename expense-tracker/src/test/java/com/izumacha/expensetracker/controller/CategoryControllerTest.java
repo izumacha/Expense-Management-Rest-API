@@ -1,6 +1,8 @@
 // コントローラのテストパッケージ
 package com.izumacha.expensetracker.controller;
 
+// カテゴリ作成リクエスト DTO を参照する（NFD正規化の回帰テストでサービスへの引数を検証するため）
+import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
 // ページ形式の返却 DTO を参照する
@@ -16,6 +18,8 @@ import com.izumacha.expensetracker.service.CategoryService;
 
 // 一覧の戻り型
 import java.util.List;
+// Unicode 正規化（NFD分解表現を作ってNFC正規化の回帰テストに使うため）
+import java.text.Normalizer;
 
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
@@ -175,6 +179,41 @@ class CategoryControllerTest {
                         .content("{\"name\":\"" + emojiName + "\"}"))
                 // DTO 検証で弾かれず 201 になることを検証する（400 ではない）
                 .andExpect(status().isCreated());
+    }
+
+    // POST: NFD分解表現（濁点付き仮名が基底文字＋結合文字の複数コードポイントに分解された表現）は
+    // コードポイント数が多くなるため、NFC正規化前のまま検証すると上限を超えて誤って400になっていた。
+    // CreateCategoryRequestの正規コンストラクタでNFC正規化してから@MaxCodePointsが検証することで、
+    // 合成後は上限内に収まる名前が誤って拒否されず201になり、かつサービスに渡る名前がNFC合成済みに
+    // なっていることを検証する（回帰防止テスト）。
+    @Test
+    void カテゴリ作成_NFD分解表現は合成後のコードポイント数で検証され201() throws Exception {
+        // 濁点付きひらがな「が」（NFCでは1コードポイント）をNFD分解表現に変換する
+        // （「か」+結合文字U+3099の2コードポイントになる）
+        String decomposedGa = Normalizer.normalize("が", Normalizer.Form.NFD);
+        // 26回繰り返すとNFD表現では52コードポイントとなり上限(50)を超えるが、
+        // NFC合成後は26コードポイントとなり上限内に収まる
+        String nfdName = decomposedGa.repeat(26);
+        // 合成後に期待される名前（「が」を26回繰り返したもの）
+        String composedName = "が".repeat(26);
+        // サービスが返す DTO を用意する
+        when(categoryService.create(any()))
+                // ID 採番済みのカテゴリ DTO を返す
+                .thenReturn(new CategoryResponse(1L, composedName));
+
+        // NFD分解表現の名前でPOSTする
+        mockMvc.perform(post("/api/categories")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // NFD分解表現（52コードポイント）の名前を持つ本体を渡す
+                        .content("{\"name\":\"" + nfdName + "\"}"))
+                // DTO 検証で誤って弾かれず 201 になることを検証する（400 ではない）
+                .andExpect(status().isCreated());
+
+        // サービスに渡されたリクエストの名前がNFC合成済み（26コードポイント）であることを検証する
+        ArgumentCaptor<CreateCategoryRequest> captor = ArgumentCaptor.forClass(CreateCategoryRequest.class);
+        verify(categoryService).create(captor.capture());
+        assertThat(captor.getValue().name()).isEqualTo(composedName);
     }
 
     // POST: サービスが重複例外を投げると 409 になることを検証する
