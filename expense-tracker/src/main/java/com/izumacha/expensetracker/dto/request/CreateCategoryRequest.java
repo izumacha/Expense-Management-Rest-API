@@ -9,6 +9,8 @@ import jakarta.validation.constraints.NotBlank;
 // 数えるため、絵文字等のサロゲートペア文字が2とカウントされ DB の varchar(n) の実際の基準
 // （コードポイント基準）とずれる。MaxCodePoints.java の Javadoc を参照）
 import com.izumacha.expensetracker.validation.MaxCodePoints;
+// カテゴリ名の正規化（前後空白除去 + NFC正規化）を参照する
+import com.izumacha.expensetracker.validation.CategoryNameNormalizer;
 
 // カテゴリ作成リクエストを表す record
 public record CreateCategoryRequest(

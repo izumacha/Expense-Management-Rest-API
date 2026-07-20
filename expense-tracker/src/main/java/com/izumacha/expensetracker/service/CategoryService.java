@@ -7,8 +7,6 @@ import com.izumacha.expensetracker.domain.Category;
 import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
 // カテゴリ更新リクエスト DTO を参照する（作成と更新の API 契約を分離する）
 import com.izumacha.expensetracker.dto.request.UpdateCategoryRequest;
-// カテゴリ名の正規化（前後空白除去 + NFC正規化）を DTO 層と共有するためのユーティリティを参照する
-import com.izumacha.expensetracker.dto.request.CategoryNameNormalizer;
 // カテゴリ返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.CategoryResponse;
 // ページ形式の返却 DTO を参照する
@@ -59,9 +57,10 @@ public class CategoryService {
     // カテゴリを新規作成する
     @Transactional
     public CategoryResponse create(CreateCategoryRequest request) {
-        // 前後の空白除去とUnicode正規化を行う（create/updateで重複しないよう一元化）。
-        // 実際に保存される値と重複チェックの対象を一致させるためここで明示的に揃える
-        String normalizedName = normalizeName(request.name());
+        // 空白除去+NFC正規化はDTOの正規コンストラクタで完了済み（request.name()）。
+        // ここではその正規化後の名前がDB列の文字数上限に収まっているかを検証する
+        // （create/updateで重複しないよう一元化）
+        String normalizedName = validateNormalizedNameLength(request.name());
         // 同名カテゴリが既に存在する場合は重複例外を投げる（409）。大文字小文字を区別せず判定する
         if (categoryRepository.existsByNameIgnoreCase(normalizedName)) {
             // 入力値を含めない安全な文言で重複を示す例外を送出する
@@ -100,8 +99,8 @@ public class CategoryService {
         Category category = categoryRepository.findById(id)
                 // 見つからなければ内部 ID を含めない安全な文言で 404 相当の例外を送出する
                 .orElseThrow(() -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND));
-        // create と同じ正規化（空白除去+Unicode正規化）。実際に保存される値で重複チェックを行うため
-        String normalizedName = normalizeName(request.name());
+        // create と同じ検証（DTO層で正規化済みの名前が文字数上限に収まっているか）
+        String normalizedName = validateNormalizedNameLength(request.name());
         // 自分自身を除いた同名カテゴリが既に存在する場合は重複例外を投げる（409）。大文字小文字を区別せず判定する
         if (categoryRepository.existsByNameIgnoreCaseAndIdNot(normalizedName, id)) {
             // 入力値を含めない安全な文言で重複を示す例外を送出する
@@ -151,25 +150,27 @@ public class CategoryService {
                 e -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e));
     }
 
-    // カテゴリ名を正規化する（空白除去 + Unicode NFC正規化）。
+    // カテゴリ名がNFC正規化後も文字数上限に収まっているか検証する。
+    // strip() + NFC正規化そのものは CreateCategoryRequest/UpdateCategoryRequest の
+    // 正規コンストラクタ（CategoryNameNormalizer.normalize()）で既に完了している
+    // （record の正規コンストラクタはインスタンス生成経路によらず必ず実行されるため、
+    // ここに渡ってくる name は常に正規化済み。二重に正規化する必要はない）。
+    // ここで改めて検証するのは、DTO層の @MaxCodePoints 検証をすり抜けてしまう
+    // 「NFC正規化で文字数が伸びて上限を超える」ケース（下記コメント参照）。
     // 濁点/半濁点付き仮名などは合成済み(NFC)と分解済み(NFD)の2通りの符号化で
-    // 見た目が同一の文字列を作れてしまい、strip() だけでは別名として重複チェックを
-    // すり抜けてしまう（existsByNameIgnoreCase / existsByNameIgnoreCaseAndIdNot はDBの
-    // 一意制約も含め単純な文字列比較のため）。NFC に揃えることで見た目が同じ名前を確実に同一視する。
+    // 見た目が同一の文字列を作れてしまうが、DTO側で既にNFCに揃えられているため、
+    // ここでの existsByNameIgnoreCase / existsByNameIgnoreCaseAndIdNot による重複チェックは
+    // 見た目が同じ名前を確実に同一視できる（DBの一意制約も含め単純な文字列比較のため、
+    // NFCに揃っていることが前提）。
     // 大文字小文字の違い（"Travel"/"travel"）は existsByNameIgnoreCase 側で同一視しており、
     // ここでは大文字小文字を変えない（保存される表示名の見た目を尊重するため）。
     // 注: DB の一意制約(@Column(unique=true))自体は大文字小文字を区別するため、
     // 大文字小文字だけが異なる名前が真に同時作成された場合の最終防波堤にはならない
-    // （NFC正規化はここで保存前に揃えているため一意制約が最終防波堤として機能するが、
+    // （NFC正規化はDTO層で保存前に揃えているため一意制約が最終防波堤として機能するが、
     // 大文字小文字はここで揃えていないため）。頻度が極めて低い理論上のレースであり、
     // 発生しても409ではなく後勝ちで2件目が別カテゴリとして作成されるだけで実害は小さいため、
     // MVPの割り切りとしてDB制約の変更（式インデックス等、DBプロバイダ依存になりうる）までは行わない。
-    private static String normalizeName(String name) {
-        // strip() + NFC正規化はDTOの正規コンストラクタと共有のロジック（CategoryNameNormalizer）で
-        // 行う。CreateCategoryRequest/UpdateCategoryRequest 経由なら既に正規化済みだが、
-        // DTOのBean Validationを経由しない直接呼び出し（テスト等）でも同じ結果になるよう
-        // ここでも同じユーティリティを通す（べき等なので二重に通しても結果は変わらない）
-        String normalized = CategoryNameNormalizer.normalize(name);
+    private static String validateNormalizedNameLength(String name) {
         // NFC 正規化は文字数を増やすことがある（合成除外文字。例: U+0958 は NFC でも
         // U+0915+U+093C の 2 文字に分解されたままになる）ため、DTO の @MaxCodePoints(max=50) を
         // 正規化前の値で通過した名前が、ここで 50 文字を超えてしまう場合がある。
@@ -181,12 +182,12 @@ public class CategoryService {
         // String#length() を使うと、絵文字等のサロゲートペア文字を 2 と数えてしまい、DB には
         // 収まる名前を誤って拒否しうる。DTO 側の @MaxCodePoints と基準を揃えるため、ここでも
         // codePointCount を使う）。
-        if (normalized.codePointCount(0, normalized.length()) > Category.NAME_MAX_LENGTH) {
+        if (name.codePointCount(0, name.length()) > Category.NAME_MAX_LENGTH) {
             // 入力値を含めない安全な文言で 400 相当の不正リクエスト例外を送出する
             throw new InvalidRequestException(ErrorMessages.CATEGORY_NAME_TOO_LONG);
         }
-        // 検証を通過した正規化済みの名前を返す
-        return normalized;
+        // 検証を通過した（DTO層で正規化済みの）名前をそのまま返す
+        return name;
     }
 
     // カテゴリ一覧をページ単位で取得する

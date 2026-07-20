@@ -9,6 +9,8 @@ import jakarta.validation.constraints.NotBlank;
 // 数えるため、絵文字等のサロゲートペア文字が2とカウントされ DB の varchar(n) の実際の基準
 // （コードポイント基準）とずれる。MaxCodePoints.java の Javadoc を参照）
 import com.izumacha.expensetracker.validation.MaxCodePoints;
+// カテゴリ名の正規化（前後空白除去 + NFC正規化）を参照する
+import com.izumacha.expensetracker.validation.CategoryNameNormalizer;
 
 // カテゴリ更新リクエストを表す record（作成リクエストと API 契約を明示的に分離する。
 // UpdateExpenseRequest と同様、現時点では CreateCategoryRequest と同じフィールド構成だが、
