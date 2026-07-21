@@ -13,6 +13,8 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 // テーブル名・制約指定用アノテーション
 import jakarta.persistence.Table;
+// 楽観ロックの版番号を宣言するアノテーション
+import jakarta.persistence.Version;
 // Lombok のゲッター自動生成
 import lombok.Getter;
 // Lombok の引数なしコンストラクタ自動生成
@@ -47,6 +49,23 @@ public class Category {
     // カテゴリ名（必須・一意・最大50文字。長さは上の定数を参照して一元管理する）
     @Column(nullable = false, unique = true, length = NAME_MAX_LENGTH)
     private String name;
+
+    // 楽観ロック用の版番号。@Version が無いと Hibernate は UPDATE/DELETE の影響行数を
+    // 検証せず、対象行が同時実行で既に削除されていても例外を投げずに0行更新のまま正常終了して
+    // しまう（RaceGuard.guarded() の onGone 分岐が実質デッドコードになる）。この列があって
+    // 初めて Hibernate は UPDATE/DELETE 文に WHERE version=? を付与し、影響行数0件を
+    // OptimisticLockingFailureException として検知できる（service/RaceGuard.java 参照）。
+    // columnDefinition で NOT NULL DEFAULT 0 を明示するのは、この列を追加する ALTER TABLE の
+    // 対象になる「マイグレーション前から存在する行」を NULL のまま残さないため。Hibernate が
+    // 生成する UPDATE/DELETE の WHERE 句は version カラムが NULL でも常に `version = ?`
+    // という等価比較になり（`version IS NULL` には自動的に切り替わらない）、SQL の NULL 比較は
+    // 常に UNKNOWN（true にならない）ため、DEFAULT を与えず NULL のまま残る行が1件でもあると
+    // その行への更新・削除は同時実行の有無に関わらず恒久的に影響行数0件＝404 になってしまう。
+    // プリミティブ型 long にしているのも、エンティティが一度も DB を経由せず新規構築された
+    // 場合（Java 側の初期値 0）に version フィールド自体が null になり得る余地を無くすため。
+    @Version
+    @Column(nullable = false, columnDefinition = "bigint not null default 0")
+    private long version;
 
     // カテゴリ名を受け取るコンストラクタ
     public Category(String name) {
