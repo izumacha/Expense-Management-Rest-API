@@ -74,6 +74,8 @@ C# .NET 10 の Clean Architecture（CQRS + MediatR 想定）の雛形。`AgentFo
 - 録画対象の代表フロー 1 本: `docker-compose up` での起動 → `curl` による経費の CRUD（登録 → 一覧 → 更新 → 削除）→ バリデーションエラー時の `{ "status", "message" }` レスポンス確認まで。
 - 録画は `docs/` 配下に置くか asciinema.org のリンクを README 冒頭のデモブロックに記載する。録画にはダミーデータのみ使い、実在の金額明細・個人情報・接続文字列を写さない。
 
+---
+
 ## 4. 実装フロー（プランモード必須）
 
 コード変更を伴う作業に着手する前に、**必ず Claude Code のプランモード（Plan Mode）で計画を作成し、ユーザーの承認を得てから実装に移る**こと。
