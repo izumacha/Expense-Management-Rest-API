@@ -284,6 +284,10 @@ repository  … データベースとのやり取り
 domain      … データの形（カテゴリ・支出）
 dto         … 外部とやり取りする入出力の形（request / response）
 exception   … エラー処理
+config      … Spring Security 設定・タイムゾーン固定
+security    … IP ベースのレート制限
+validation  … カスタム入力チェック（文字数など）
+web         … エラー応答の共通整形・ページング入力の無害化・本文サイズ上限
 ```
 
 ### 設計のポイント
@@ -587,6 +591,10 @@ repository  … talking to the database
 domain      … the shape of the data (Category, Expense)
 dto         … the input/output shapes exchanged with the outside (request / response)
 exception   … error handling
+config      … Spring Security setup and fixed server timezone
+security    … IP-based rate limiting
+validation  … custom input checks (e.g. code-point length limits)
+web         … cross-cutting concerns: shared error response formatting, pageable input sanitization, request body size limit
 ```
 
 ### Design points
