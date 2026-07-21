@@ -87,8 +87,17 @@ public class Expense {
     // しまう（RaceGuard.guarded() の onGone 分岐が実質デッドコードになる）。この列があって
     // 初めて Hibernate は UPDATE/DELETE 文に WHERE version=? を付与し、影響行数0件を
     // OptimisticLockingFailureException として検知できる（service/RaceGuard.java 参照）。
+    // columnDefinition で NOT NULL DEFAULT 0 を明示するのは、この列を追加する ALTER TABLE の
+    // 対象になる「マイグレーション前から存在する行」を NULL のまま残さないため。Hibernate が
+    // 生成する UPDATE/DELETE の WHERE 句は version カラムが NULL でも常に `version = ?`
+    // という等価比較になり（`version IS NULL` には自動的に切り替わらない）、SQL の NULL 比較は
+    // 常に UNKNOWN（true にならない）ため、DEFAULT を与えず NULL のまま残る行が1件でもあると
+    // その行への更新・削除は同時実行の有無に関わらず恒久的に影響行数0件＝404 になってしまう。
+    // プリミティブ型 long にしているのも、エンティティが一度も DB を経由せず新規構築された
+    // 場合（Java 側の初期値 0）に version フィールド自体が null になり得る余地を無くすため。
     @Version
-    private Long version;
+    @Column(nullable = false, columnDefinition = "bigint not null default 0")
+    private long version;
 
     // 永続化の直前に作成日時を補完するコールバック
     @jakarta.persistence.PrePersist
