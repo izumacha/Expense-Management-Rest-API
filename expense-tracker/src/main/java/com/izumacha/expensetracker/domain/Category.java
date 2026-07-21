@@ -13,6 +13,8 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 // テーブル名・制約指定用アノテーション
 import jakarta.persistence.Table;
+// 楽観ロックの版番号を宣言するアノテーション
+import jakarta.persistence.Version;
 // Lombok のゲッター自動生成
 import lombok.Getter;
 // Lombok の引数なしコンストラクタ自動生成
@@ -47,6 +49,14 @@ public class Category {
     // カテゴリ名（必須・一意・最大50文字。長さは上の定数を参照して一元管理する）
     @Column(nullable = false, unique = true, length = NAME_MAX_LENGTH)
     private String name;
+
+    // 楽観ロック用の版番号。@Version が無いと Hibernate は UPDATE/DELETE の影響行数を
+    // 検証せず、対象行が同時実行で既に削除されていても例外を投げずに0行更新のまま正常終了して
+    // しまう（RaceGuard.guarded() の onGone 分岐が実質デッドコードになる）。この列があって
+    // 初めて Hibernate は UPDATE/DELETE 文に WHERE version=? を付与し、影響行数0件を
+    // OptimisticLockingFailureException として検知できる（service/RaceGuard.java 参照）。
+    @Version
+    private Long version;
 
     // カテゴリ名を受け取るコンストラクタ
     public Category(String name) {

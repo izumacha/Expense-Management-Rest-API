@@ -21,6 +21,8 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 // テーブル名指定用アノテーション
 import jakarta.persistence.Table;
+// 楽観ロックの版番号を宣言するアノテーション
+import jakarta.persistence.Version;
 // 10進数の金額型
 import java.math.BigDecimal;
 // 日付型
@@ -79,6 +81,14 @@ public class Expense {
     // 作成日時（必須・作成時に自動セット）
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    // 楽観ロック用の版番号。@Version が無いと Hibernate は UPDATE/DELETE の影響行数を
+    // 検証せず、対象行が同時実行で既に削除されていても例外を投げずに0行更新のまま正常終了して
+    // しまう（RaceGuard.guarded() の onGone 分岐が実質デッドコードになる）。この列があって
+    // 初めて Hibernate は UPDATE/DELETE 文に WHERE version=? を付与し、影響行数0件を
+    // OptimisticLockingFailureException として検知できる（service/RaceGuard.java 参照）。
+    @Version
+    private Long version;
 
     // 永続化の直前に作成日時を補完するコールバック
     @jakarta.persistence.PrePersist
