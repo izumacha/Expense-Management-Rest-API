@@ -75,8 +75,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // このクラスのログ出力に使うロガー
     private static final Logger log = LoggerFactory.getLogger(RateLimitFilter.class);
 
-    // 追跡する送信元 IP の最大数（無制限に増やしてメモリを枯渇させないための上限）
-    private static final int MAX_TRACKED_CLIENTS = 10_000;
+    // 追跡する送信元 IP の最大数（無制限に増やしてメモリを枯渇させないための上限）。
+    // 同一パッケージのテストから上限値を参照できるようパッケージプライベートにしている
+    static final int MAX_TRACKED_CLIENTS = 10_000;
+
+    // 追跡テーブルが満杯のとき、未追跡の新規送信元をまとめて数えるための共有バケットのキー。
+    // IP アドレスには使われない文字（アンダースコア等）で構成し、実クライアントのキーと衝突しないようにする
+    private static final String OVERFLOW_KEY = "__overflow__";
 
     // IPv4 アドレスの形式を確認するパターン（例: 192.168.0.1）。
     // ネストした量指定子を使わないため ReDoS が起きない（§9）。
@@ -269,25 +274,36 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 log.warn("追跡クライアント数が上限({})に達しました。古いエントリの削除を検討してください。", MAX_TRACKED_CLIENTS); // 上限到達時に警告ログを出力（同一ウィンドウ内では 1 回だけ）
             }
         }
-        // 送信元の現在ウィンドウのカウンタを取得する（無ければ新規ウィンドウで作成）
-        Window window = counters.compute(clientKey, (key, existing) -> {
+        // 実際にカウントするキーを決める。通常は送信元ごとのキーをそのまま使う
+        String effectiveKey = clientKey;
+        // 追跡テーブルが満杯で、かつまだ追跡されていない新規送信元の場合は共有オーバーフローバケットに振り替える。
+        // 【fail-open → fail-safe への変更とそのトレードオフ】旧実装は満杯時の新規送信元を
+        // 「追跡せず素通し」にしていたため、攻撃者が送信元アドレス（特に IPv6）を毎ウィンドウ
+        // 切り替えてテーブルを埋め尽くすと、以降の新規キーからのアクセスが一切制限されない
+        // フェイルオープンの抜け穴になっていた。本実装では満杯時の未追跡送信元を単一の
+        // 共有バケット（OVERFLOW_KEY、上限は通常キーと同じ capacity）でまとめて数えるため、
+        // 満杯時の流量も全体として必ず頭打ちになる（フェイルセーフ）。代償として、テーブルが
+        // 満杯の間だけは正当な新規クライアント同士がこのバケットを共有し、互いの消費で早めに
+        // 429 になりうるが、満杯自体が異常（攻撃または容量不足）な状態であり、その間の新規
+        // クライアントを無制限に通すよりも安全側に倒す方が §9（fail-safe）に適う。
+        // なお containsKey と compute の間の TOCTOU で「直後に追跡され始めた送信元」が
+        // オーバーフロー側に数えられることがあるが、制限が緩む方向ではないため許容している。
+        if (atCapacity && !counters.containsKey(clientKey)) {
+            // 共有オーバーフローバケットのキーに切り替える（テーブルには 1 エントリしか増えない）
+            effectiveKey = OVERFLOW_KEY;
+        }
+        // 決定したキーの現在ウィンドウのカウンタを取得する（無ければ新規ウィンドウで作成）
+        Window window = counters.compute(effectiveKey, (key, existing) -> {
             // 同じウィンドウの既存カウンタがあればそれを引き続き使う
             if (existing != null && existing.windowId == currentWindow) {
                 // 既存をそのまま返す
                 return existing;
             }
-            // 追跡上限に達している新規送信元は、メモリ枯渇を避けるため追跡対象に加えない（安全側に通す）。
-            // この判定と compute の間には TOCTOU があるが、結果は「新規クライアントが追跡されず通過する」だけであり、
-            // レート制限の意図（既存クライアントの制限）を壊さないため許容している（設計上の意識的なトレードオフ）。
-            if (existing == null && atCapacity) {
-                // マッピングを作らない（null を返すと項目は追加されない）
-                return null;
-            }
-            // それ以外（新規で空きがある／同じ送信元のウィンドウ切替）は新しいウィンドウ（カウント 0）を作る
+            // それ以外（新規／同じキーのウィンドウ切替）は新しいウィンドウ（カウント 0）を作る
             return new Window(currentWindow);
         });
-        // 追跡対象に加えなかった（メモリ上限）場合は通過させ、それ以外はカウントを 1 増やして上限超過を判定する
-        return window != null && window.count.incrementAndGet() > capacity;
+        // カウントを 1 増やし、単位時間の上限を超えたかどうかを返す
+        return window.count.incrementAndGet() > capacity;
     }
 
     // 1 つの送信元の「対象ウィンドウ番号」と「そのウィンドウ内のカウント」を表す内部クラス
