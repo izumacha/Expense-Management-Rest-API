@@ -19,7 +19,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * 文字列に制御文字（C0 制御文字 U+0000〜U+001F。ただしタブ・改行・復帰は除く）が
+ * 文字列に制御文字（ISO 制御文字＝C0: U+0000〜U+001F・DEL: U+007F・C1: U+0080〜U+009F。
+ * ただしタブ・改行・復帰は除く）や、対にならない UTF-16 サロゲート（不正な文字表現）が
  * 含まれていないことを検証する Bean Validation 制約。
  *
  * <p>特に NUL（U+0000）は標準制約（{@code @NotBlank} / {@link MaxCodePoints} 等）を
@@ -29,9 +30,18 @@ import java.lang.annotation.Target;
  * （「カテゴリが見つかりません」）や 500 として返ってしまうため、DTO の入力検証段階で
  * 400（Bean Validation エラー）として拒否する。
  *
- * <p>NUL 以外の C0 制御文字も名前・説明の値として意味を持たない（端末制御・改ページ等の
- * 制御用途）ため合わせて拒否するが、複数行の説明等で正当に使われうるタブ（U+0009）・
- * 改行（U+000A）・復帰（U+000D）は許容し、拒否範囲を必要最小限に留める。
+ * <p>NUL 以外の ISO 制御文字（DEL や C1 を含む）も名前・説明の値として意味を持たない
+ * （端末制御・改ページ等の制御用途）ため合わせて拒否するが、複数行の説明等で正当に
+ * 使われうるタブ（U+0009）・改行（U+000A）・復帰（U+000D）は許容し、拒否範囲を
+ * 必要最小限に留める。
+ *
+ * <p>対にならないサロゲート（例: JSON の {@code "a\ud800b"} のような、高位サロゲートの
+ * 直後に低位サロゲートが続かない・低位サロゲートが単独で現れる文字列）も拒否する。
+ * これらは UTF-8 へ変換できない不正な文字列であり、既存の制約と Unicode 正規化を通過した
+ * 後に PostgreSQL の「invalid byte sequence for encoding UTF8」エラーとして初めて失敗する。
+ * その失敗はサービス層の保存時 catch で一意制約・FK のレース由来と誤認され、誤った 409
+ * （「既に存在します」）や 404 として返ってしまうため、入力検証段階で 400 として拒否する。
+ * 正しい高位＋低位のサロゲートペア（絵文字等）はこれまで通り合格する。
  */
 // フィールド・record コンポーネント・メソッド引数に付けられる制約であることを宣言する
 @Target({ElementType.FIELD, ElementType.PARAMETER, ElementType.METHOD, ElementType.ANNOTATION_TYPE})
@@ -53,10 +63,6 @@ public @interface NoControlCharacters {
     // 実際の検証ロジックを持つ Validator 実装
     class Validator implements ConstraintValidator<NoControlCharacters, String> {
 
-        // 拒否対象となる C0 制御文字の範囲の排他的上限（この値未満＝U+0000〜U+001F が C0。
-        // タブ・改行・復帰の例外は下の判定側で許容する）を表す定数
-        private static final char C0_CONTROL_UPPER_BOUND = 0x20;
-
         // 実際の検証本体。true を返せば合格、false なら制約違反として扱われる
         @Override
         public boolean isValid(String value, ConstraintValidatorContext context) {
@@ -65,18 +71,37 @@ public @interface NoControlCharacters {
             if (value == null) {
                 return true;
             }
-            // 文字列を 1 文字（UTF-16 コード単位）ずつ調べる。C0 制御文字はすべて BMP 内の
-            // 単一コード単位なので、コードポイント走査に切り替えなくても取りこぼしは無い
+            // 文字列を 1 文字（UTF-16 コード単位）ずつ調べる。制御文字（C0・DEL・C1）はすべて
+            // BMP 内の単一コード単位、サロゲートの対不成立もコード単位の並びで判定できるため、
+            // コードポイント走査に切り替えなくても取りこぼしは無い
             for (int i = 0; i < value.length(); i++) {
                 // 現在位置の文字を取り出す
                 char c = value.charAt(i);
-                // C0 制御文字（U+0000〜U+001F）のうち、タブ・改行・復帰以外が見つかったら不合格にする
-                if (c < C0_CONTROL_UPPER_BOUND && c != '\t' && c != '\n' && c != '\r') {
-                    // 許容外の制御文字（NUL 等）を含むため制約違反として false を返す
+                // 高位サロゲート（絵文字等の前半 U+D800〜U+DBFF）が見つかった場合の対チェック
+                if (Character.isHighSurrogate(c)) {
+                    // 直後に低位サロゲート（後半 U+DC00〜U+DFFF）が続かなければ不正な文字表現とみなす
+                    if (i + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(i + 1))) {
+                        // 高位サロゲートが単独で存在する（UTF-8 に変換できない）ため不合格として false を返す
+                        return false;
+                    }
+                    // 正しい対（絵文字等）なので、対になっている低位サロゲートを読み飛ばして次へ進む
+                    i++;
+                    // このコードポイントの判定は完了したので次のループへ進む
+                    continue;
+                }
+                // 低位サロゲートが単独で現れた（対応する高位サロゲートが直前に無い）場合は不合格にする
+                if (Character.isLowSurrogate(c)) {
+                    // 低位サロゲート単独は UTF-8 に変換できない不正な文字表現のため false を返す
+                    return false;
+                }
+                // ISO 制御文字（C0: U+0000〜U+001F、DEL: U+007F、C1: U+0080〜U+009F）のうち、
+                // タブ・改行・復帰以外が見つかったら不合格にする
+                if (Character.isISOControl(c) && c != '\t' && c != '\n' && c != '\r') {
+                    // 許容外の制御文字（NUL・DEL・C1 等）を含むため制約違反として false を返す
                     return false;
                 }
             }
-            // 許容外の制御文字が見つからなかったので合格として true を返す
+            // 許容外の制御文字・対にならないサロゲートが見つからなかったので合格として true を返す
             return true;
         }
     }
