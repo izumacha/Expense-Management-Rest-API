@@ -10,6 +10,14 @@
 
 個人の支出を記録・集計する **家計簿アプリのバックエンド REST API** を中心としたリポジトリです。
 
+### 🎬 デモ（curl で経費 CRUD）
+
+起動確認 → カテゴリ・支出の登録 → 一覧 → 更新 → 月次集計 → 削除 → バリデーションエラー（`{ "status", "message" }`）までを、実際に `curl` で操作した端末録画です（データはすべてダミー）。
+
+![支出管理 REST API を curl で操作する端末デモ（支出の登録・一覧・更新・月次集計・削除とバリデーションエラー応答）](./docs/screenshots/expense-tracker-crud-demo.gif)
+
+> UI を持たない API のため、公開デモ URL の代わりに端末操作の録画を掲載しています。
+
 ### 📂 メインプロジェクト：[`expense-tracker/`](./expense-tracker/)
 
 支出管理 API の本体です。カテゴリ・支出の登録／一覧／更新／削除と、月ごとの集計ができます。
@@ -35,6 +43,14 @@ docker compose up --build
 ## English
 
 This repository centers on a **backend REST API for a household expense-tracking app** that records and aggregates personal spending.
+
+### 🎬 Demo (expense CRUD via curl)
+
+A terminal recording of the actual `curl` flow: startup check → creating categories and expenses → listing → updating → monthly summary → deleting → a validation error returning `{ "status", "message" }` (all data is dummy data).
+
+![支出管理 REST API を curl で操作する端末デモ（支出の登録・一覧・更新・月次集計・削除とバリデーションエラー応答）](./docs/screenshots/expense-tracker-crud-demo.gif)
+
+> Since this API has no UI, a terminal recording is provided instead of a public demo URL.
 
 ### 📂 Main project: [`expense-tracker/`](./expense-tracker/)
 
