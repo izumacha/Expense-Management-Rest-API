@@ -187,6 +187,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
             // parts[parts.length - 1] が ArrayIndexOutOfBoundsException でフィルタごとクラッシュしていた。
             // lastIndexOf 方式なら末尾トークンが空でも空文字列が得られ、
             // 下の looksLikeIp 判定に失敗して getRemoteAddr() へ安全にフォールバックする（§9 fail-safe）。
+            // 【挙動変更の明記】旧 split 実装は末尾カンマ（例: "1.2.3.4,"）で直前の非空トークンを採用していたが、
+            // 本実装ではフォールバックに変わる。信頼契約に従うプロキシは末尾に実 IP を追記するため
+            // 末尾カンマは正常経路では発生せず、発生時（設定ミス＝ヘッダ全体が攻撃者制御下）は
+            // 攻撃者の選んだ値を採用しないフォールバックのほうが安全（意図的な厳格化）。
             String candidate = forwarded.substring(forwarded.lastIndexOf(',') + 1).strip(); // 最後のカンマの次から末尾までを候補 IP として切り出す（カンマが無ければ全体）
             // IP アドレスの形式でない場合は偽装値または設定ミスの可能性があるためフォールバックする（§9 fail-closed）
             if (looksLikeIp(candidate)) {
