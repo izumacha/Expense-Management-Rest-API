@@ -27,6 +27,8 @@ import com.izumacha.expensetracker.exception.NotFoundException;
 import com.izumacha.expensetracker.repository.CategoryRepository;
 // 支出リポジトリを参照する（削除時にカテゴリが支出から使用中か確認するため）
 import com.izumacha.expensetracker.repository.ExpenseRepository;
+// JPA の永続化コンテキスト操作用エンティティマネージャ（楽観ロック失敗後の後始末に使う）
+import jakarta.persistence.EntityManager;
 // 一意制約違反を検出する例外（create() の事前チェックすり抜けを捕捉する。update()/delete() は
 // RaceGuard.guarded() のラムダ内で暗黙に扱うためこのクラス自体を直接参照しない）
 import org.springframework.dao.DataIntegrityViolationException;
@@ -49,13 +51,18 @@ public class CategoryService {
     private final CategoryRepository categoryRepository;
     // 支出リポジトリへの参照（削除時の使用中チェックに使う）
     private final ExpenseRepository expenseRepository;
+    // 永続化コンテキストへの参照（楽観ロック失敗後に保留中の変更を破棄するために使う）
+    private final EntityManager entityManager;
 
     // コンストラクタインジェクションで依存を受け取る
-    public CategoryService(CategoryRepository categoryRepository, ExpenseRepository expenseRepository) {
+    public CategoryService(CategoryRepository categoryRepository, ExpenseRepository expenseRepository,
+            EntityManager entityManager) {
         // 受け取ったカテゴリリポジトリをフィールドに設定する
         this.categoryRepository = categoryRepository;
         // 受け取った支出リポジトリをフィールドに設定する
         this.expenseRepository = expenseRepository;
+        // 受け取ったエンティティマネージャをフィールドに設定する
+        this.entityManager = entityManager;
     }
 
     // カテゴリを新規作成する
@@ -162,6 +169,13 @@ public class CategoryService {
     // 一律 404 にすると、実在するカテゴリに対して誤って「見つかりません」を返してしまうため、
     // 行の存在を再確認して振り分ける（update/delete の両経路で共通利用する）
     private RuntimeException resolveOptimisticLockFailure(Long id, OptimisticLockingFailureException e) {
+        // flush 失敗時、失敗した UPDATE/DELETE は Hibernate のアクションキューに残留し、
+        // エンティティも変更あり（dirty）のまま管理下に残る。その状態で存在確認クエリを
+        // 発行すると、同一テーブルへのクエリ前の auto-flush が同じ文を再実行して楽観ロック
+        // 例外を再送出し、この振り分け自体が 500 になってしまう。存在確認の前に永続化
+        // コンテキストを破棄して保留中の変更を捨てる（トランザクションは既に rollback-only
+        // のため、破棄しても失われる正常な変更は無い）
+        entityManager.clear();
         // 対象行がまだ DB に存在するかを確認する（存在すれば削除ではなく同時更新の競合と判断できる）
         if (categoryRepository.existsById(id)) {
             // 行が残っている＝同時更新の競合なので、安全な文言の 409 例外へ変換する（原因は追跡用に連鎖させる）

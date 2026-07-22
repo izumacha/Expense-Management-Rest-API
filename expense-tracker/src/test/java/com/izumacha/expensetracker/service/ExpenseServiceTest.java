@@ -84,6 +84,10 @@ class ExpenseServiceTest {
     @Mock
     private CategoryRepository categoryRepository;
 
+    // エンティティマネージャのモック（楽観ロック失敗後の永続化コンテキスト破棄で使う）
+    @Mock
+    private jakarta.persistence.EntityManager entityManager;
+
     // テスト対象のサービス（summaryMaxCategories はプリミティブ int のため
     // Mockito の @InjectMocks ではモック注入できず、明示的にコンストラクタで組み立てる）
     private ExpenseService expenseService;
@@ -91,7 +95,7 @@ class ExpenseServiceTest {
     // 各テスト前に、application.yml の既定値(100)と同じ上限でサービスを組み立てる
     @BeforeEach
     void setUp() {
-        expenseService = new ExpenseService(expenseRepository, categoryRepository, 100);
+        expenseService = new ExpenseService(expenseRepository, categoryRepository, entityManager, 100);
     }
 
     // ID を持つカテゴリを組み立てるヘルパー

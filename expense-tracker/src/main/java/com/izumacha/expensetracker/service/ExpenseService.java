@@ -29,6 +29,8 @@ import com.izumacha.expensetracker.exception.NotFoundException;
 import com.izumacha.expensetracker.repository.CategoryRepository;
 // 支出リポジトリを参照する
 import com.izumacha.expensetracker.repository.ExpenseRepository;
+// JPA の永続化コンテキスト操作用エンティティマネージャ（楽観ロック失敗後の後始末に使う）
+import jakarta.persistence.EntityManager;
 // 合計初期値に使う10進数型
 import java.math.BigDecimal;
 // 合計の小数桁を揃える際の丸めモードを指定する型
@@ -69,6 +71,8 @@ public class ExpenseService {
     private final ExpenseRepository expenseRepository;
     // カテゴリリポジトリへの参照
     private final CategoryRepository categoryRepository;
+    // 永続化コンテキストへの参照（楽観ロック失敗後に保留中の変更を破棄するために使う）
+    private final EntityManager entityManager;
 
     // 金額の小数桁数（DB の amount 列 numeric(19,2) の scale=2 に合わせる）。
     // 集計結果の総合計を常にこの桁数へ揃え、支出のない月（"0"）と支出のある月（"1234.00"）で
@@ -87,12 +91,15 @@ public class ExpenseService {
     public ExpenseService(
             ExpenseRepository expenseRepository,
             CategoryRepository categoryRepository,
+            EntityManager entityManager,
             // application.yml の一覧ページング上限値をそのまま注入する（未設定時は既定の100件）
             @Value("${spring.data.web.pageable.max-page-size:100}") int summaryMaxCategories) {
         // 支出リポジトリをフィールドに設定する
         this.expenseRepository = expenseRepository;
         // カテゴリリポジトリをフィールドに設定する
         this.categoryRepository = categoryRepository;
+        // 受け取ったエンティティマネージャをフィールドに設定する
+        this.entityManager = entityManager;
         // 注入されたページング上限値を summary の打ち切り件数としても使う
         this.summaryMaxCategories = summaryMaxCategories;
     }
@@ -263,6 +270,13 @@ public class ExpenseService {
     // 一律 404 にすると、実在する支出に対して誤って「見つかりません」を返してしまうため、
     // 行の存在を再確認して振り分ける（update/delete の両経路で共通利用する）
     private RuntimeException resolveOptimisticLockFailure(Long id, OptimisticLockingFailureException e) {
+        // flush 失敗時、失敗した UPDATE/DELETE は Hibernate のアクションキューに残留し、
+        // エンティティも変更あり（dirty）のまま管理下に残る。その状態で存在確認クエリを
+        // 発行すると、同一テーブルへのクエリ前の auto-flush が同じ文を再実行して楽観ロック
+        // 例外を再送出し、この振り分け自体が 500 になってしまう。存在確認の前に永続化
+        // コンテキストを破棄して保留中の変更を捨てる（トランザクションは既に rollback-only
+        // のため、破棄しても失われる正常な変更は無い）
+        entityManager.clear();
         // 対象行がまだ DB に存在するかを確認する（存在すれば削除ではなく同時更新の競合と判断できる）。
         // id の null チェックは防御的なもの（INSERT 経路は楽観ロック失敗を起こさないため通常 id は非 null）
         if (id != null && expenseRepository.existsById(id)) {

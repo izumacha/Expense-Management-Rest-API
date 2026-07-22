@@ -78,6 +78,10 @@ class CategoryServiceTest {
     @Mock
     private ExpenseRepository expenseRepository;
 
+    // エンティティマネージャのモック（楽観ロック失敗後の永続化コンテキスト破棄で使う）
+    @Mock
+    private jakarta.persistence.EntityManager entityManager;
+
     // 上記モックを注入したテスト対象のサービス
     @InjectMocks
     private CategoryService categoryService;
