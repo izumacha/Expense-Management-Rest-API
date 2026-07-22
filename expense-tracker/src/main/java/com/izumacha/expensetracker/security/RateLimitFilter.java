@@ -21,6 +21,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 // 入出力例外型
 import java.io.IOException;
+// 同名ヘッダの全行を順に読み取るための列挙型（X-Forwarded-For が複数行あるケースに使う）
+import java.util.Enumeration;
 // IP 形式検証に使う正規表現パターン
 import java.util.regex.Pattern;
 // 送信元ごとのカウンタを保持するスレッドセーフなマップ
@@ -82,14 +84,19 @@ public class RateLimitFilter extends OncePerRequestFilter {
             Pattern.compile("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$");
 
     // IPv6 アドレスの形式を確認するパターン（例: ::1、2001:db8::1）。
-    // 16 進数とコロンのみで構成され、最長 39 文字以内に収まる形式を許容する。
+    // 16 進数とコロンのみで構成され、コロンを最低 1 つ含み、最長 39 文字以内に収まる形式を許容する。
+    // 【コロンを必須にする理由】旧パターン（^[0-9a-fA-F:]{2,39}$）はコロンを含まない 16 進文字
+    // だけの文字列（例: "deadbeef"）まで IPv6 と誤判定していた。IPv6 表記には必ず ':' が現れる
+    // ため、先頭の先読み (?=.*:) で「どこかに ':' がある」ことを必須とし、IP でない任意の
+    // 16 進風文字列がレート制限キーとして採用されるのを防ぐ。先読みは 1 パスの走査だけで
+    // ネストした量指定子を持たず、入力長も looksLikeIp 側で 39 文字に制限済みのため ReDoS は起きない（§9）。
     // 【意図的な寛容設計】完全な IPv6 構文検証（グループ数・二重コロン規則等）をここで行うと
     // 正規表現が複雑になり ReDoS のリスクが高まる（CLAUDE.md §9）。そのため形式チェックを
-    // 「16 進数とコロンのみ」に留めている。`:::` のような非合法な IPv6 風文字列が通過しても
-    // レート制限キーとして格納されるだけであり、攻撃者にとって有利な挙動にはならない
-    // （攻撃者は末尾トークンを偽装できないため）。
+    // 「16 進数とコロンのみ＋コロン必須」に留めている。`:::` のような非合法な IPv6 風文字列が
+    // 通過してもレート制限キーとして格納されるだけであり、攻撃者にとって有利な挙動にはならない
+    // （攻撃者は最後のヘッダ行の末尾トークンを偽装できないため）。
     private static final Pattern IPV6_PATTERN =
-            Pattern.compile("^[0-9a-fA-F:]{2,39}$");
+            Pattern.compile("^(?=.*:)[0-9a-fA-F:]{2,39}$");
 
     // 1 つの送信元が単位時間内に許可されるリクエスト数の上限
     private final int capacity;
@@ -99,13 +106,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // デフォルト false: 直接接続を前提とし、ユーザーが偽装できる X-Forwarded-For を無視する。
     //
     // 【true に設定する場合の必須要件 — 設定ミスは深刻なセキュリティ問題を招く】
-    // (1) リバースプロキシは "X-Forwarded-For: <既存値>, <接続元IP>" の形式で
-    //     接続元 IP を末尾（最後のトークン）に追記するよう設定すること。
-    //     末尾トークンはプロキシが付与するため攻撃者が偽装できないが、
-    //     プロキシが先頭に追記したり、ヘッダをそのままスルーしたりする設定では
-    //     攻撃者が末尾トークンを制御でき、他クライアントのレート制限枠を消費させられる。
+    // (1) リバースプロキシは接続元 IP を「最後」に付与するよう設定すること。
+    //     既存行への追記型（"X-Forwarded-For: <既存値>, <接続元IP>"）と、
+    //     別ヘッダ行の追加型（HAProxy の option forwardfor 等。既存行に連結せず
+    //     独立した X-Forwarded-For 行を後ろに追加する）のどちらでもよい。
+    //     本フィルタは「最後のヘッダ行の末尾トークン」を採用するため、いずれの方式でも
+    //     プロキシが付与した接続元 IP が選ばれ、攻撃者が最初から送り込んだ値
+    //     （既存行の先頭トークンや、先行する別ヘッダ行）は選ばれない。
+    //     プロキシが接続元 IP を先頭に付与したり、ヘッダをそのままスルーしたりする設定では
+    //     攻撃者が採用位置のトークンを制御でき、他クライアントのレート制限枠を消費させられる。
     // (2) プロキシが既存の X-Forwarded-For ヘッダをクライアント側からの値ごと信用して
-    //     そのまま転送しないこと（先頭にクライアントが任意値を挿入できてしまう）。
+    //     破棄も追記もせずそのまま転送しないこと（採用位置にクライアントが任意値を挿入できてしまう）。
     // (3) プロキシへの直接アクセスをネットワーク層でブロックし、
     //     外部からアプリに X-Forwarded-For を直送できないようにすること（§9）。
     private final boolean trustXForwardedFor;
@@ -168,18 +179,31 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // X-Forwarded-For はユーザーが任意の値を送れるヘッダであるため、
     // 信頼できるリバースプロキシが設定・書き換える保証がなければ使ってはいけない。
     //
-    // 【末尾トークンを採用する理由】
+    // 【最後のヘッダ行・末尾トークンを採用する理由】
     // 複数プロキシを経由すると "client, proxy1, proxy2, ..." の形式になる。
     // 先頭（index 0）はクライアントが任意に偽装できる。
     // 末尾（最後のトークン）は直近の信頼プロキシが接続元として記録した IP であり
     // ユーザーが書き換えられない。Spring の ForwardedHeaderFilter も同じ方針を採用している。
+    // さらに、追記型のプロキシ（HAProxy の option forwardfor 等）は既存行へ連結せず
+    // 「独立した X-Forwarded-For 行」を後ろに追加するため、同名ヘッダが複数行になりうる。
+    // getHeader() は最初の 1 行しか返さず、攻撃者が最初から送り込んだ行が選ばれてしまう
+    // （その行の末尾トークンも攻撃者制御下）ので、getHeaders() で全行を読み最後の行
+    // （＝直近の信頼プロキシが付与した行）を採用する。
     private String resolveClientKey(HttpServletRequest request) {
         // trust-x-forwarded-for が有効でない場合はヘッダを無視して接続元 IP をそのまま使う
         if (!trustXForwardedFor) {
             return request.getRemoteAddr(); // 直接接続元 IP（スプーフィング不可）
         }
-        // X-Forwarded-For ヘッダ値を取得する（リバースプロキシが付与する転送元 IP）
-        String forwarded = request.getHeader("X-Forwarded-For");
+        // X-Forwarded-For の「すべてのヘッダ行」を到着順の列挙として取得する
+        // （getHeader() だと最初の 1 行＝攻撃者が偽装できる行しか見えないため）
+        Enumeration<String> headerLines = request.getHeaders("X-Forwarded-For");
+        // 最後のヘッダ行（＝直近の信頼プロキシが付与した行）を受け取る変数（無ければ null のまま）
+        String forwarded = null;
+        // 列挙を最後まで読み進め、最後の行だけを残す（サーブレット API に「最後の行だけ取得」は無いため）
+        while (headerLines != null && headerLines.hasMoreElements()) {
+            // 現在の行で候補を上書きする（ループ終了時には最後の行が残る）
+            forwarded = headerLines.nextElement();
+        }
         // ヘッダが存在し空でない場合は末尾トークン（信頼プロキシが記録した IP）を使う
         if (forwarded != null && !forwarded.isBlank()) {
             // カンマ区切りで複数の IP が連なる場合は、最後のカンマより後ろ（末尾トークン）だけを取り出してトリムする。
