@@ -13,8 +13,12 @@ import com.izumacha.expensetracker.dto.response.CategoryResponse;
 import com.izumacha.expensetracker.dto.response.PageResponse;
 // 参照中カテゴリの削除禁止例外を参照する
 import com.izumacha.expensetracker.exception.CategoryInUseException;
+// 楽観ロック競合例外を参照する（同時更新レースが 409 になることの検証に使う）
+import com.izumacha.expensetracker.exception.ConflictException;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
+// 外部向けエラーメッセージ定数を参照する（競合時の安全な文言の検証に使う）
+import com.izumacha.expensetracker.exception.ErrorMessages;
 // 不正リクエスト例外を参照する（NFC 正規化後の文字数超過が 400 になることの検証に使う）
 import com.izumacha.expensetracker.exception.InvalidRequestException;
 // 未存在例外を参照する
@@ -392,11 +396,39 @@ class CategoryServiceTest {
         when(categoryRepository.saveAndFlush(any(Category.class)))
                 // 楽観ロックの行数不一致例外を投げる
                 .thenThrow(new OptimisticLockingFailureException("0 rows affected"));
+        // 楽観ロック失敗後の存在確認で「行はもう無い」（＝本当に削除された）を返すようモックする
+        when(categoryRepository.existsById(1L)).thenReturn(false);
 
         // update 呼び出しで NotFoundException（404 相当）に変換されることを検証する
         assertThatThrownBy(() -> categoryService.update(1L, new UpdateCategoryRequest("交通費")))
                 // 例外型が NotFoundException であることを確認する（409 の重複例外ではない）
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    // update: 楽観ロック例外の発生後も行が残っている（＝削除ではなく別の操作が先に更新して
+    // 版番号が進んだ競合）場合は、404 ではなく 409（ConflictException）に変換されることを検証する。
+    // 実在するカテゴリに対して誤って「見つかりません」を返さないための振り分けを確認する
+    @Test
+    void update_同時更新で版番号が進んだ競合は409例外に変換() {
+        // 更新前のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 主キー 1 の検索で更新前カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 事前チェックは false（重複なし）を返すようモックする
+        when(categoryRepository.existsByNameIgnoreCaseAndIdNot("交通費", 1L)).thenReturn(false);
+        // 保存時に別リクエストが先に同じカテゴリを更新したレースを模擬して楽観ロック例外を投げさせる
+        when(categoryRepository.saveAndFlush(any(Category.class)))
+                // 楽観ロックの版番号不一致例外を投げる
+                .thenThrow(new OptimisticLockingFailureException("version mismatch"));
+        // 楽観ロック失敗後の存在確認で「行はまだある」（＝同時更新の競合）を返すようモックする
+        when(categoryRepository.existsById(1L)).thenReturn(true);
+
+        // update 呼び出しで ConflictException（409 相当）に変換されることを検証する
+        assertThatThrownBy(() -> categoryService.update(1L, new UpdateCategoryRequest("交通費")))
+                // 例外型が ConflictException であることを確認する（404 の未存在例外ではない）
+                .isInstanceOf(ConflictException.class)
+                // 安全な日本語文言（競合・再試行の案内）に変換されていることを確認する
+                .hasMessage(ErrorMessages.CONCURRENT_CONFLICT);
     }
 
     // delete: 支出から参照されていなければ削除することを検証する
@@ -485,11 +517,38 @@ class CategoryServiceTest {
         doThrow(new OptimisticLockingFailureException("0 rows affected"))
                 // 対象のメソッドを指定する
                 .when(categoryRepository).flush();
+        // 楽観ロック失敗後の存在確認で「行はもう無い」（＝本当に削除された）を返すようモックする
+        when(categoryRepository.existsById(1L)).thenReturn(false);
 
         // delete 呼び出しで NotFoundException（404 相当）に変換されることを検証する
         assertThatThrownBy(() -> categoryService.delete(1L))
                 // 例外型が NotFoundException であることを確認する（409 の使用中例外ではない）
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    // delete: 楽観ロック例外の発生後も行が残っている（＝削除ではなく別の操作が先に更新して
+    // 版番号が進んだ競合）場合は、404 ではなく 409（ConflictException）に変換されることを検証する
+    @Test
+    void delete_同時更新で版番号が進んだ競合は409例外に変換() {
+        // 削除対象のカテゴリ（食費）を用意する
+        Category existing = category(1L, "食費");
+        // 主キー 1 の検索で対象カテゴリを返すようモックする
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 支出からの参照は無い（false）を返すようモックする
+        when(expenseRepository.existsByCategoryId(1L)).thenReturn(false);
+        // flush() の時点で別リクエストが先に同じカテゴリを更新していたレースを模擬して楽観ロック例外を投げさせる
+        doThrow(new OptimisticLockingFailureException("version mismatch"))
+                // 対象のメソッドを指定する
+                .when(categoryRepository).flush();
+        // 楽観ロック失敗後の存在確認で「行はまだある」（＝同時更新の競合）を返すようモックする
+        when(categoryRepository.existsById(1L)).thenReturn(true);
+
+        // delete 呼び出しで ConflictException（409 相当）に変換されることを検証する
+        assertThatThrownBy(() -> categoryService.delete(1L))
+                // 例外型が ConflictException であることを確認する（404 の未存在例外ではない）
+                .isInstanceOf(ConflictException.class)
+                // 安全な日本語文言（競合・再試行の案内）に変換されていることを確認する
+                .hasMessage(ErrorMessages.CONCURRENT_CONFLICT);
     }
 
     // findAll: 全カテゴリが DTO のページに変換されることを検証する

@@ -94,6 +94,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(new ErrorResponse(HttpStatus.CONFLICT.value(), ex.getMessage()));
     }
 
+    // 楽観ロック競合（同時実行の別操作が対象を先に変更していた場合。409）を処理するハンドラ
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ErrorResponse> handleConflict(ConflictException ex) {
+        // 409 のエラーレスポンスを返す
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                // 本体にステータスと例外メッセージを格納する
+                .body(new ErrorResponse(HttpStatus.CONFLICT.value(), ex.getMessage()));
+    }
+
     // リクエスト本文サイズの上限超過（413）を処理するハンドラ。
     // RequestBodySizeLimitFilter が Content-Length を偽る／付けないクライアントに備えて本文読み取り
     // 自体を上限で打ち切る際、Jackson のストリーム読取中（コントローラ呼び出し前）に送出される。

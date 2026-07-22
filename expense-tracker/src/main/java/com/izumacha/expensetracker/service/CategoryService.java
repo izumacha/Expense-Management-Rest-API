@@ -13,6 +13,8 @@ import com.izumacha.expensetracker.dto.response.CategoryResponse;
 import com.izumacha.expensetracker.dto.response.PageResponse;
 // 参照中カテゴリの削除禁止例外を参照する（409 相当。支出から使用中のカテゴリを削除しようとしたとき送出する）
 import com.izumacha.expensetracker.exception.CategoryInUseException;
+// 楽観ロック競合例外を参照する（409 相当。別の操作が対象を先に変更していたとき送出する）
+import com.izumacha.expensetracker.exception.ConflictException;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
 // 外部向けエラーメッセージ定数を参照する
@@ -28,6 +30,8 @@ import com.izumacha.expensetracker.repository.ExpenseRepository;
 // 一意制約違反を検出する例外（create() の事前チェックすり抜けを捕捉する。update()/delete() は
 // RaceGuard.guarded() のラムダ内で暗黙に扱うためこのクラス自体を直接参照しない）
 import org.springframework.dao.DataIntegrityViolationException;
+// 楽観ロック失敗例外（版番号の不一致・対象行の消失。resolveOptimisticLockFailure で 409/404 へ振り分ける）
+import org.springframework.dao.OptimisticLockingFailureException;
 // ページ単位の取得結果を表す型
 import org.springframework.data.domain.Page;
 // ページ指定（ページ番号・件数）を表す型
@@ -117,9 +121,10 @@ public class CategoryService {
                 () -> CategoryResponse.from(categoryRepository.saveAndFlush(category)),
                 // DB の一意制約違反を、入力値を含めない安全な文言で 409 相当の重複例外へ変換する
                 e -> new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE, e),
-                // UPDATE の影響行数が0件だった、つまり更新対象のカテゴリ自体が同時実行で
-                // 削除されたレースを 404 相当の未存在例外へ変換する
-                e -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e));
+                // 楽観ロック失敗（UPDATE の影響行数が0件）は「対象が同時実行で削除された」と
+                // 「別の操作が先に更新して版番号（@Version）が進んだ（行は残っている）」の両方で
+                // 起きるため、存在を確認して 409（競合）か 404（未存在）へ振り分ける
+                e -> resolveOptimisticLockFailure(id, e));
     }
 
     // カテゴリを削除する（支出から参照中の場合は削除を拒否する）
@@ -145,9 +150,25 @@ public class CategoryService {
         },
                 // DB の外部キー制約違反を、入力値を含めない安全な文言で 409 相当の使用中例外へ変換する
                 e -> new CategoryInUseException(ErrorMessages.CATEGORY_IN_USE, e),
-                // DELETE の影響行数が0件だった、つまり削除対象のカテゴリ自体が同時実行で
-                // 既に削除されたレースを 404 相当の未存在例外へ変換する
-                e -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e));
+                // 楽観ロック失敗（DELETE の影響行数が0件）は「対象が同時実行で既に削除された」と
+                // 「別の操作が先に更新して版番号（@Version）が進んだ（行は残っている）」の両方で
+                // 起きるため、存在を確認して 409（競合）か 404（未存在）へ振り分ける
+                e -> resolveOptimisticLockFailure(id, e));
+    }
+
+    // 楽観ロック失敗（OptimisticLockingFailureException）を 409/404 のどちらのドメイン例外へ
+    // 変換するかを決める。@Version 導入後、この例外は「対象行が同時実行で消えた」だけでなく
+    // 「別の操作が先に更新して版番号が進んだ（行は残っている）」場合にも発生する。後者まで
+    // 一律 404 にすると、実在するカテゴリに対して誤って「見つかりません」を返してしまうため、
+    // 行の存在を再確認して振り分ける（update/delete の両経路で共通利用する）
+    private RuntimeException resolveOptimisticLockFailure(Long id, OptimisticLockingFailureException e) {
+        // 対象行がまだ DB に存在するかを確認する（存在すれば削除ではなく同時更新の競合と判断できる）
+        if (categoryRepository.existsById(id)) {
+            // 行が残っている＝同時更新の競合なので、安全な文言の 409 例外へ変換する（原因は追跡用に連鎖させる）
+            return new ConflictException(ErrorMessages.CONCURRENT_CONFLICT, e);
+        }
+        // 行が消えている＝同時削除なので、404 相当の未存在例外へ変換する（原因は追跡用に連鎖させる）
+        return new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e);
     }
 
     // カテゴリ名がNFC正規化後も文字数上限に収まっているか検証する。

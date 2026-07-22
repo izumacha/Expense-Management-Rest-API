@@ -53,6 +53,10 @@ public final class ErrorMessages {
     // 想定外のサーバ内部エラー時に返す汎用文言（内部詳細・スタックトレースは含めない）
     public static final String INTERNAL_ERROR = "サーバー内部でエラーが発生しました";
 
+    // 楽観ロック失敗（同時実行の別操作が対象を先に変更していた競合）を検知したときの安全な文言
+    // （内部の版番号や DB の詳細は含めず、再試行を促すだけに留める）
+    public static final String CONCURRENT_CONFLICT = "他の操作と競合しました。もう一度お試しください";
+
     // レート制限を超過したときの安全な文言（しきい値の詳細は含めない）
     public static final String TOO_MANY_REQUESTS = "リクエストが多すぎます。しばらく待って再試行してください";
 
