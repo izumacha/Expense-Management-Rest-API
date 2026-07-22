@@ -53,7 +53,8 @@ public @interface NoControlCharacters {
     // 実際の検証ロジックを持つ Validator 実装
     class Validator implements ConstraintValidator<NoControlCharacters, String> {
 
-        // 許容する C0 制御文字の上限境界（U+0020 未満＝C0 制御文字の範囲）を表す定数
+        // 拒否対象となる C0 制御文字の範囲の排他的上限（この値未満＝U+0000〜U+001F が C0。
+        // タブ・改行・復帰の例外は下の判定側で許容する）を表す定数
         private static final char C0_CONTROL_UPPER_BOUND = 0x20;
 
         // 実際の検証本体。true を返せば合格、false なら制約違反として扱われる
