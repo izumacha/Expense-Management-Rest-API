@@ -220,6 +220,25 @@ class CategoryControllerTest {
         assertThat(captor.getValue().name()).isEqualTo(composedName);
     }
 
+    // POST: NUL（U+0000）を含む名前は Bean Validation で 400 になることを検証する。
+    // NUL は @NotBlank / @MaxCodePoints をすべて通過する一方、PostgreSQL の text/varchar 列には
+    // 保存できず DB 層で初めてエラーになり、誤った 404/500 に化けていた。@NoControlCharacters が
+    // 入力段階で 400 として弾くことを確認する（JSON のユニコードエスケープ（バックスラッシュ + u0000）で NUL を表現し、
+    // ソースファイル自体には不可視の制御文字を埋め込まない）
+    @Test
+    void カテゴリ作成_NULを含む名前は400() throws Exception {
+        // NUL（JSON のユニコードエスケープで表現）を含む名前で POST する
+        mockMvc.perform(post("/api/categories")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 名前の途中に NUL を含む本体を渡す（\\u0000 は JSON パース後に実際の NUL になる）
+                        .content("{\"name\":\"食\\u0000費\"}"))
+                // ステータスが 400 であることを検証する（DB 由来の 404/500 ではない）
+                .andExpect(status().isBadRequest())
+                // 本体の status フィールドが 400 であることを検証する
+                .andExpect(jsonPath("$.status").value(400));
+    }
+
     // POST: サービスが重複例外を投げると 409 になることを検証する
     @Test
     void カテゴリ作成_重複は409() throws Exception {

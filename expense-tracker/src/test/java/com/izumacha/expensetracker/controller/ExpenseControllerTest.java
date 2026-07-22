@@ -168,6 +168,26 @@ class ExpenseControllerTest {
                 .andExpect(status().isBadRequest());
     }
 
+    // POST: NUL（U+0000）を含む説明は Bean Validation で 400 になることを検証する。
+    // NUL は @MaxCodePoints 等の既存制約をすべて通過する一方、PostgreSQL の text/varchar 列には
+    // 保存できず DB 層で初めてエラーになり、保存時 catch で「カテゴリが見つかりません」という
+    // 誤った 404 や 500 に化けていた。@NoControlCharacters が入力段階で 400 として弾くことを
+    // 確認する（JSON のユニコードエスケープ（バックスラッシュ + u0000）で NUL を表現し、
+    // ソースファイル自体には不可視の制御文字を埋め込まない）
+    @Test
+    void 支出作成_NULを含む説明は400() throws Exception {
+        // NUL（JSON のユニコードエスケープで表現）を含む説明で POST する
+        mockMvc.perform(post("/api/expenses")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 説明の途中に NUL を含む本体を渡す（\\u0000 は JSON パース後に実際の NUL になる）
+                        .content("{\"amount\":1000,\"categoryId\":1,\"description\":\"ランチ\\u0000メモ\",\"spentOn\":\"2026-06-09\"}"))
+                // ステータスが 400 であることを検証する（DB 由来の誤った 404/500 ではない）
+                .andExpect(status().isBadRequest())
+                // 本体の status フィールドが 400 であることを検証する
+                .andExpect(jsonPath("$.status").value(400));
+    }
+
     // GET: 一覧取得は 200 とページ形式のサービス結果を返すことを検証する
     @Test
     void 支出一覧_200で返る() throws Exception {
