@@ -15,6 +15,9 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 // 文字数をコードポイント単位で制限するバリデーション（DB varchar 列の基準に合わせる）
 import com.izumacha.expensetracker.validation.MaxCodePoints;
+// 制御文字（NUL 等）を含まないことを検証するバリデーション（PostgreSQL は NUL を text 列に
+// 保存できず DB 層で初めてエラーになり、誤った 404/500 に化けるため入力段階で 400 として弾く）
+import com.izumacha.expensetracker.validation.NoControlCharacters;
 
 // 支出更新リクエストを表す record（作成リクエストと API 契約を明示的に分離する）
 // 現時点では CreateExpenseRequest と同じフィールド構成だが、
@@ -34,8 +37,10 @@ public record UpdateExpenseRequest(
         @NotNull(message = "must not be null")
         Long categoryId,
 
-        // 説明（任意・最大255文字。サロゲートペア文字でも DB の varchar(255) と基準を合わせるためコードポイント単位で検証する）
+        // 説明（任意・最大255文字・制御文字禁止。サロゲートペア文字でも DB の varchar(255) と基準を合わせるためコードポイント単位で検証する）
         @MaxCodePoints(max = 255, message = "must be at most 255 characters")
+        // NUL 等の制御文字を禁止する（タブ・改行・復帰は許容。詳細は NoControlCharacters の Javadoc を参照）
+        @NoControlCharacters(message = "must not contain control characters")
         String description,
 
         // 支出日（必須・未来日不可）

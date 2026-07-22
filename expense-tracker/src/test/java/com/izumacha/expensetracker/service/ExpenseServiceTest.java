@@ -15,6 +15,8 @@ import com.izumacha.expensetracker.dto.response.CategorySummary;
 import com.izumacha.expensetracker.dto.response.ExpenseResponse;
 // 月次集計返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
+// 楽観ロック競合例外を参照する（同時更新レースが 409 になることの検証に使う）
+import com.izumacha.expensetracker.exception.ConflictException;
 // 外部向けエラーメッセージ定数を参照する
 import com.izumacha.expensetracker.exception.ErrorMessages;
 // クライアント起因の不正リクエスト例外を参照する
@@ -82,6 +84,10 @@ class ExpenseServiceTest {
     @Mock
     private CategoryRepository categoryRepository;
 
+    // エンティティマネージャのモック（楽観ロック失敗後の永続化コンテキスト破棄で使う）
+    @Mock
+    private jakarta.persistence.EntityManager entityManager;
+
     // テスト対象のサービス（summaryMaxCategories はプリミティブ int のため
     // Mockito の @InjectMocks ではモック注入できず、明示的にコンストラクタで組み立てる）
     private ExpenseService expenseService;
@@ -89,7 +95,7 @@ class ExpenseServiceTest {
     // 各テスト前に、application.yml の既定値(100)と同じ上限でサービスを組み立てる
     @BeforeEach
     void setUp() {
-        expenseService = new ExpenseService(expenseRepository, categoryRepository, 100);
+        expenseService = new ExpenseService(expenseRepository, categoryRepository, entityManager, 100);
     }
 
     // ID を持つカテゴリを組み立てるヘルパー
@@ -358,6 +364,8 @@ class ExpenseServiceTest {
         when(expenseRepository.saveAndFlush(any(Expense.class)))
                 // 楽観ロックの行数不一致例外を投げる
                 .thenThrow(new OptimisticLockingFailureException("0 rows affected"));
+        // 楽観ロック失敗後の存在確認で「行はもう無い」（＝本当に削除された）を返すようモックする
+        when(expenseRepository.existsById(5L)).thenReturn(false);
 
         // update 呼び出しが NotFoundException（404 相当）へ変換されることを検証する
         assertThatThrownBy(() -> expenseService.update(5L, request))
@@ -365,6 +373,44 @@ class ExpenseServiceTest {
                 .isInstanceOf(NotFoundException.class)
                 // 安全な日本語文言（支出未存在。カテゴリ未存在とは異なるメッセージ）に変換されていることを確認する
                 .hasMessage(ErrorMessages.EXPENSE_NOT_FOUND);
+    }
+
+    // update: 楽観ロック例外の発生後も行が残っている（＝削除ではなく別の操作が先に更新して
+    // 版番号が進んだ競合）場合は、404 ではなく 409（ConflictException）に変換されることを検証する。
+    // 実在する支出に対して誤って「見つかりません」を返さないための振り分けを確認する
+    @Test
+    void update_同時更新で版番号が進んだ競合は409例外に変換() {
+        // 交通費カテゴリと既存支出（id=5）を用意する
+        Category transport = category(2L, "交通費");
+        // 既存の支出を用意する
+        Expense existing = expense(5L, transport, "300", LocalDate.of(2026, 6, 1));
+        // 更新リクエストを用意する
+        UpdateExpenseRequest request = new UpdateExpenseRequest(
+                // 新しい金額
+                new BigDecimal("480"),
+                // カテゴリ ID
+                2L,
+                // 説明
+                "バス",
+                // 新しい支出日
+                LocalDate.of(2026, 6, 5));
+        // 対象支出の取得は成功するようモックする
+        when(expenseRepository.findById(5L)).thenReturn(Optional.of(existing));
+        // カテゴリ取得も成功する（事前チェックは通過する）ようモックする
+        when(categoryRepository.findById(2L)).thenReturn(Optional.of(transport));
+        // 保存時に別リクエストが先に同じ支出を更新したレースを模擬して楽観ロック例外を投げさせる
+        when(expenseRepository.saveAndFlush(any(Expense.class)))
+                // 楽観ロックの版番号不一致例外を投げる
+                .thenThrow(new OptimisticLockingFailureException("version mismatch"));
+        // 楽観ロック失敗後の存在確認で「行はまだある」（＝同時更新の競合）を返すようモックする
+        when(expenseRepository.existsById(5L)).thenReturn(true);
+
+        // update 呼び出しが ConflictException（409 相当）へ変換されることを検証する
+        assertThatThrownBy(() -> expenseService.update(5L, request))
+                // 例外型が ConflictException であることを確認する（404 の未存在例外ではない）
+                .isInstanceOf(ConflictException.class)
+                // 安全な日本語文言（競合・再試行の案内）に変換されていることを確認する
+                .hasMessage(ErrorMessages.CONCURRENT_CONFLICT);
     }
 
     // search: month=null のとき期間は null のままリポジトリへ渡されることを検証する
@@ -578,6 +624,8 @@ class ExpenseServiceTest {
         doThrow(new OptimisticLockingFailureException("0 rows affected"))
                 // flush 呼び出し時に例外を投げるようモックする
                 .when(expenseRepository).flush();
+        // 楽観ロック失敗後の存在確認で「行はもう無い」（＝本当に削除された）を返すようモックする
+        when(expenseRepository.existsById(7L)).thenReturn(false);
 
         // delete 呼び出しが NotFoundException（404 相当）へ変換されることを検証する
         assertThatThrownBy(() -> expenseService.delete(7L))
@@ -585,6 +633,31 @@ class ExpenseServiceTest {
                 .isInstanceOf(NotFoundException.class)
                 // 安全な日本語文言（支出未存在）に変換されていることを確認する
                 .hasMessage(ErrorMessages.EXPENSE_NOT_FOUND);
+    }
+
+    // delete: 楽観ロック例外の発生後も行が残っている（＝削除ではなく別の操作が先に更新して
+    // 版番号が進んだ競合）場合は、404 ではなく 409（ConflictException）に変換されることを検証する
+    @Test
+    void delete_同時更新で版番号が進んだ競合は409例外に変換() {
+        // 既存カテゴリを用意する
+        Category food = category(1L, "食費");
+        // 既存支出（id=7）を用意する
+        Expense existing = expense(7L, food, "1000", LocalDate.of(2026, 6, 2));
+        // 支出検索が既存支出を返すようモックする
+        when(expenseRepository.findById(7L)).thenReturn(Optional.of(existing));
+        // flush() の時点で別リクエストが先に同じ支出を更新していたレースを模擬して楽観ロック例外を投げさせる
+        doThrow(new OptimisticLockingFailureException("version mismatch"))
+                // flush 呼び出し時に例外を投げるようモックする
+                .when(expenseRepository).flush();
+        // 楽観ロック失敗後の存在確認で「行はまだある」（＝同時更新の競合）を返すようモックする
+        when(expenseRepository.existsById(7L)).thenReturn(true);
+
+        // delete 呼び出しが ConflictException（409 相当）へ変換されることを検証する
+        assertThatThrownBy(() -> expenseService.delete(7L))
+                // 例外型が ConflictException であることを確認する（404 の未存在例外ではない）
+                .isInstanceOf(ConflictException.class)
+                // 安全な日本語文言（競合・再試行の案内）に変換されていることを確認する
+                .hasMessage(ErrorMessages.CONCURRENT_CONFLICT);
     }
 
     // summary: 総合計は月全体の SUM クエリから、内訳はカテゴリ別集計から組み立てられることを検証する

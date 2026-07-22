@@ -9,8 +9,12 @@ import com.izumacha.expensetracker.dto.response.CategoryResponse;
 import com.izumacha.expensetracker.dto.response.PageResponse;
 // 参照中カテゴリの削除禁止例外を参照する
 import com.izumacha.expensetracker.exception.CategoryInUseException;
+// 楽観ロック競合例外を参照する（同時更新レースの 409 応答の検証に使う）
+import com.izumacha.expensetracker.exception.ConflictException;
 // 重複例外を参照する
 import com.izumacha.expensetracker.exception.DuplicateException;
+// 外部向けエラーメッセージ定数を参照する（競合時の安全な文言の検証に使う）
+import com.izumacha.expensetracker.exception.ErrorMessages;
 // 未存在例外を参照する
 import com.izumacha.expensetracker.exception.NotFoundException;
 // カテゴリサービスを参照する
@@ -214,6 +218,25 @@ class CategoryControllerTest {
         ArgumentCaptor<CreateCategoryRequest> captor = ArgumentCaptor.forClass(CreateCategoryRequest.class);
         verify(categoryService).create(captor.capture());
         assertThat(captor.getValue().name()).isEqualTo(composedName);
+    }
+
+    // POST: NUL（U+0000）を含む名前は Bean Validation で 400 になることを検証する。
+    // NUL は @NotBlank / @MaxCodePoints をすべて通過する一方、PostgreSQL の text/varchar 列には
+    // 保存できず DB 層で初めてエラーになり、誤った 404/500 に化けていた。@NoControlCharacters が
+    // 入力段階で 400 として弾くことを確認する（JSON のユニコードエスケープ（バックスラッシュ + u0000）で NUL を表現し、
+    // ソースファイル自体には不可視の制御文字を埋め込まない）
+    @Test
+    void カテゴリ作成_NULを含む名前は400() throws Exception {
+        // NUL（JSON のユニコードエスケープで表現）を含む名前で POST する
+        mockMvc.perform(post("/api/categories")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 名前の途中に NUL を含む本体を渡す（\\u0000 は JSON パース後に実際の NUL になる）
+                        .content("{\"name\":\"食\\u0000費\"}"))
+                // ステータスが 400 であることを検証する（DB 由来の 404/500 ではない）
+                .andExpect(status().isBadRequest())
+                // 本体の status フィールドが 400 であることを検証する
+                .andExpect(jsonPath("$.status").value(400));
     }
 
     // POST: サービスが重複例外を投げると 409 になることを検証する
@@ -424,6 +447,31 @@ class CategoryControllerTest {
                 .andExpect(status().isConflict())
                 // 本体の status フィールドが 409 であることを検証する
                 .andExpect(jsonPath("$.status").value(409));
+    }
+
+    // PUT: サービスが楽観ロック競合の例外（別の操作が先に更新した）を投げると 409 になり、
+    // {status, message} 契約の安全な文言（再試行の案内）が返ることを検証する
+    @Test
+    void カテゴリ更新_同時更新の競合は409() throws Exception {
+        // サービスの update が ConflictException を投げるようモックする
+        when(categoryService.update(eq(1L), any()))
+                // 楽観ロック競合例外を投げる（本番と同じ一元管理された文言を使う）
+                .thenThrow(new ConflictException(ErrorMessages.CONCURRENT_CONFLICT));
+
+        // 正しい形式の本体で PUT する（競合はサービス層で検知される想定）
+        mockMvc.perform(put("/api/categories/1")
+                        // JSON 形式であることを宣言する
+                        .contentType("application/json")
+                        // 名前を持つ本体を渡す
+                        .content("""
+                                {"name":"交通費"}
+                                """))
+                // ステータスが 409 であることを検証する
+                .andExpect(status().isConflict())
+                // 本体の status フィールドが 409 であることを検証する
+                .andExpect(jsonPath("$.status").value(409))
+                // 本体の message が安全な競合文言（内部詳細を含まない）であることを検証する
+                .andExpect(jsonPath("$.message").value(ErrorMessages.CONCURRENT_CONFLICT));
     }
 
     // DELETE: 正常時は 204 No Content になることを検証する

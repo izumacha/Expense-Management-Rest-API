@@ -17,6 +17,8 @@ import com.izumacha.expensetracker.dto.response.ExpenseResponse;
 import com.izumacha.expensetracker.dto.response.PageResponse;
 // 月次集計返却 DTO を参照する
 import com.izumacha.expensetracker.dto.response.SummaryResponse;
+// 楽観ロック競合例外を参照する（409 相当。別の操作が対象を先に変更していたとき送出する）
+import com.izumacha.expensetracker.exception.ConflictException;
 // 外部向けエラーメッセージ定数を参照する
 import com.izumacha.expensetracker.exception.ErrorMessages;
 // クライアント起因の不正リクエスト例外を参照する
@@ -27,6 +29,8 @@ import com.izumacha.expensetracker.exception.NotFoundException;
 import com.izumacha.expensetracker.repository.CategoryRepository;
 // 支出リポジトリを参照する
 import com.izumacha.expensetracker.repository.ExpenseRepository;
+// JPA の永続化コンテキスト操作用エンティティマネージャ（楽観ロック失敗後の後始末に使う）
+import jakarta.persistence.EntityManager;
 // 合計初期値に使う10進数型
 import java.math.BigDecimal;
 // 合計の小数桁を揃える際の丸めモードを指定する型
@@ -39,7 +43,8 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 // 一覧の戻り型
 import java.util.List;
-// 楽観ロックの行数不一致例外。同時実行で更新/削除対象の支出自体が消えた場合に発生する
+// 楽観ロックの行数不一致例外。同時実行で更新/削除対象の支出自体が消えた場合のほか、
+// 別の操作が先に更新して版番号（@Version）が進んだ（行は残っている）場合にも発生する
 // (DataIntegrityViolationException は RaceGuard.guarded() のラムダ内で暗黙に扱うため
 // このクラス自体を直接参照しない)
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -66,6 +71,8 @@ public class ExpenseService {
     private final ExpenseRepository expenseRepository;
     // カテゴリリポジトリへの参照
     private final CategoryRepository categoryRepository;
+    // 永続化コンテキストへの参照（楽観ロック失敗後に保留中の変更を破棄するために使う）
+    private final EntityManager entityManager;
 
     // 金額の小数桁数（DB の amount 列 numeric(19,2) の scale=2 に合わせる）。
     // 集計結果の総合計を常にこの桁数へ揃え、支出のない月（"0"）と支出のある月（"1234.00"）で
@@ -84,12 +91,15 @@ public class ExpenseService {
     public ExpenseService(
             ExpenseRepository expenseRepository,
             CategoryRepository categoryRepository,
+            EntityManager entityManager,
             // application.yml の一覧ページング上限値をそのまま注入する（未設定時は既定の100件）
             @Value("${spring.data.web.pageable.max-page-size:100}") int summaryMaxCategories) {
         // 支出リポジトリをフィールドに設定する
         this.expenseRepository = expenseRepository;
         // カテゴリリポジトリをフィールドに設定する
         this.categoryRepository = categoryRepository;
+        // 受け取ったエンティティマネージャをフィールドに設定する
+        this.entityManager = entityManager;
         // 注入されたページング上限値を summary の打ち切り件数としても使う
         this.summaryMaxCategories = summaryMaxCategories;
     }
@@ -157,9 +167,11 @@ public class ExpenseService {
             expenseRepository.delete(expense);
             expenseRepository.flush();
         } catch (OptimisticLockingFailureException e) {
-            // 削除対象の行が既に無く、DELETE の影響行数が0件だった（同時実行で先に消された）ケース。
+            // 楽観ロック失敗（DELETE の影響行数が0件）は「対象が同時実行で先に消された」と
+            // 「別の操作が先に更新して版番号（@Version）が進んだ（行は残っている）」の両方で
+            // 起きるため、存在を確認して 409（競合）か 404（未存在）へ振り分ける。
             // 生の DB メッセージは外部に出さず、原因例外は追跡用に連鎖させる（共通規約 §6/§9）。
-            throw new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND, e);
+            throw resolveOptimisticLockFailure(id, e);
         }
     }
 
@@ -244,10 +256,35 @@ public class ExpenseService {
                 // 事前検証済み（DB の date 範囲外は 400 で先に弾く）。よってこの時点で残る制約違反は
                 // 「参照先カテゴリが消えた」レースだけなので、500 ではなく 404 を返す
                 e -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND, e),
-                // UPDATE の影響行数が0件だった、つまり更新対象の支出自体が同時実行で消えたレース。
+                // 楽観ロック失敗（UPDATE の影響行数が0件）は「更新対象の支出が同時実行で消えた」と
+                // 「別の操作が先に更新して版番号（@Version）が進んだ（行は残っている）」の両方で
+                // 起きるため、存在を確認して 409（競合）か 404（未存在）へ振り分ける。
                 // create() は新規 INSERT でこの経路を通らないため、update() 由来と確定できる
                 // （影響行数チェックは UPDATE/DELETE のみで起こり、INSERT では発生しない）
-                e -> new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND, e));
+                e -> resolveOptimisticLockFailure(expense.getId(), e));
+    }
+
+    // 楽観ロック失敗（OptimisticLockingFailureException）を 409/404 のどちらのドメイン例外へ
+    // 変換するかを決める。@Version 導入後、この例外は「対象行が同時実行で消えた」だけでなく
+    // 「別の操作が先に更新して版番号が進んだ（行は残っている）」場合にも発生する。後者まで
+    // 一律 404 にすると、実在する支出に対して誤って「見つかりません」を返してしまうため、
+    // 行の存在を再確認して振り分ける（update/delete の両経路で共通利用する）
+    private RuntimeException resolveOptimisticLockFailure(Long id, OptimisticLockingFailureException e) {
+        // flush 失敗時、失敗した UPDATE/DELETE は Hibernate のアクションキューに残留し、
+        // エンティティも変更あり（dirty）のまま管理下に残る。その状態で存在確認クエリを
+        // 発行すると、同一テーブルへのクエリ前の auto-flush が同じ文を再実行して楽観ロック
+        // 例外を再送出し、この振り分け自体が 500 になってしまう。存在確認の前に永続化
+        // コンテキストを破棄して保留中の変更を捨てる（トランザクションは既に rollback-only
+        // のため、破棄しても失われる正常な変更は無い）
+        entityManager.clear();
+        // 対象行がまだ DB に存在するかを確認する（存在すれば削除ではなく同時更新の競合と判断できる）。
+        // id の null チェックは防御的なもの（INSERT 経路は楽観ロック失敗を起こさないため通常 id は非 null）
+        if (id != null && expenseRepository.existsById(id)) {
+            // 行が残っている＝同時更新の競合なので、安全な文言の 409 例外へ変換する（原因は追跡用に連鎖させる）
+            return new ConflictException(ErrorMessages.CONCURRENT_CONFLICT, e);
+        }
+        // 行が消えている＝同時削除なので、404 相当の未存在例外へ変換する（原因は追跡用に連鎖させる）
+        return new NotFoundException(ErrorMessages.EXPENSE_NOT_FOUND, e);
     }
 
     // カテゴリを取得し、無ければ404例外を投げる

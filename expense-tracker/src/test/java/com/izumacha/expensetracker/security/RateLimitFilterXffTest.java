@@ -52,7 +52,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ol>
  *   <li>XFF の末尾 IP でレート制限がかかること（末尾 = プロキシが記録した接続元）</li>
  *   <li>XFF にカンマ区切りで複数 IP が並ぶとき、末尾 IP がレート制限キーになること</li>
+ *   <li>XFF ヘッダが複数行あるとき、最後の行（追記型プロキシが付与した行）がキーになること</li>
  *   <li>XFF の値が IP 形式でない場合は getRemoteAddr()（127.0.0.1）にフォールバックすること</li>
+ *   <li>コロンを含まない 16 進のみの値（"deadbeef"）が IPv6 として誤採用されないこと</li>
  * </ol>
  */
 // テスト対象のコントローラを CategoryController に限定する（スライステスト）
@@ -193,6 +195,86 @@ class RateLimitFilterXffTest {
                         .header("X-Forwarded-For", "invalid-hostname"))
                 // 3 回目は上限超過なので 429 になることを検証する
                 .andExpect(status().isTooManyRequests());
+    }
+
+    /**
+     * X-Forwarded-For ヘッダが「複数行」ある場合、最後のヘッダ行がレート制限キーの元になることを検証する。
+     *
+     * <p>HAProxy の option forwardfor など追記型のプロキシは、既存の X-Forwarded-For 行へ連結せず
+     * 独立したヘッダ行を「後ろ」に追加する。getHeader() は最初の 1 行しか返さないため、旧実装では
+     * 攻撃者が最初から送り込んだ行（1 行目）が選ばれ、その行を変えるだけでレート制限キーを
+     * 偽装できてしまっていた。最後の行（プロキシが付与した行）を採用すれば、1 行目に何を
+     * 送っても同一クライアントとして正しくレート制限がかかる。
+     */
+    // 複数ヘッダ行の XFF で最後の行がキーになることを確認するテスト
+    @Test
+    void XFF複数ヘッダ行では最後の行でレート制限がかかる() throws Exception {
+        // 1 行目=攻撃者偽装（203.0.113.1）、2 行目=プロキシ付与（198.51.100.7）→ 最後の行がキー、1 回目は 200
+        mockMvc.perform(get("/api/categories")
+                        // 攻撃者がリクエストに最初から含めた偽の XFF 行（正しい IP 形式で偽装している点が重要）
+                        .header("X-Forwarded-For", "203.0.113.1")
+                        // 追記型プロキシが後ろに追加した実接続元の XFF 行
+                        .header("X-Forwarded-For", "198.51.100.7"))
+                // 1 回目は制限内なので 200 になることを検証する
+                .andExpect(status().isOk());
+
+        // 1 行目の偽装 IP を変えても、最後の行（198.51.100.7）が同じなら同一クライアント扱い、2 回目は 200
+        mockMvc.perform(get("/api/categories")
+                        // 攻撃者が 1 行目の偽装 IP を変える（キー偽装の試み）
+                        .header("X-Forwarded-For", "203.0.113.2")
+                        // プロキシが付与する実接続元の行は変わらない
+                        .header("X-Forwarded-For", "198.51.100.7"))
+                // 2 回目も制限内なので 200 になることを検証する
+                .andExpect(status().isOk());
+
+        // 1 行目をさらに変えても最後の行が同じなので上限超過、3 回目は 429
+        mockMvc.perform(get("/api/categories")
+                        // 攻撃者が 1 行目の偽装 IP をさらに変える
+                        .header("X-Forwarded-For", "203.0.113.3")
+                        // プロキシが付与する実接続元の行は変わらない
+                        .header("X-Forwarded-For", "198.51.100.7"))
+                // 3 回目は上限超過なので 429 になることを検証する（1 行目の偽装ではキーを変えられない）
+                .andExpect(status().isTooManyRequests());
+    }
+
+    /**
+     * コロンを含まない 16 進文字のみの文字列（例: "deadbeef"）は IPv6 として誤採用されず、
+     * getRemoteAddr() にフォールバックすることを検証する。
+     *
+     * <p>旧パターン（^[0-9a-fA-F:]{2,39}$）は "deadbeef" を IPv6 と誤判定し、接続元 IP と
+     * 無関係な任意キーとしてカウンタを汚染できた。修正後はコロン必須のため拒否される。
+     * 同じ "deadbeef" を送っても接続元 IP が異なれば別カウンタになる（＝ヘッダ値がキーに
+     * なっていない）ことで、フォールバックを確認する。
+     */
+    // 16 進のみ（コロン無し）の XFF が IPv6 として採用されないことを確認するテスト
+    @Test
+    void XFFがコロン無しの16進文字列なら採用せずリモートアドレスにフォールバックする() throws Exception {
+        // XFF: deadbeef → IPv6 形式でないため接続元 IP（10.99.1.1）がキーに、1 回目は 200
+        mockMvc.perform(get("/api/categories")
+                        // コロンを含まない 16 進文字のみの値を送る（旧パターンでは IPv6 と誤判定されていた）
+                        .header("X-Forwarded-For", "deadbeef")
+                        // このリクエスト固有の接続元 IP を設定する
+                        .with(remoteAddr("10.99.1.1")))
+                // 1 回目（このキーでは初回）なので 200 になることを検証する
+                .andExpect(status().isOk());
+
+        // 同じ XFF: deadbeef でも接続元 IP が違えば別カウンタ、こちらも 200
+        mockMvc.perform(get("/api/categories")
+                        // 同じ 16 進のみの値を送る
+                        .header("X-Forwarded-For", "deadbeef")
+                        // 別の接続元 IP を設定する（"deadbeef" がキーなら同一カウンタになってしまう）
+                        .with(remoteAddr("10.99.1.2")))
+                // 別カウンタ扱いなので 200 になることを検証する
+                .andExpect(status().isOk());
+
+        // さらに別の接続元 IP でも 200（3 回とも別カウンタ＝ヘッダ値はキーとして採用されていない）
+        mockMvc.perform(get("/api/categories")
+                        // 同じ 16 進のみの値を送る
+                        .header("X-Forwarded-For", "deadbeef")
+                        // さらに別の接続元 IP を設定する
+                        .with(remoteAddr("10.99.1.3")))
+                // "deadbeef" がキーなら 3 回目で 429 になるはずだが、拒否されているため 200 になることを検証する
+                .andExpect(status().isOk());
     }
 
     /**
