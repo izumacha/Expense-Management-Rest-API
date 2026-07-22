@@ -59,14 +59,15 @@ import org.springframework.web.filter.OncePerRequestFilter;
 // 現状は permitAll() のため実害は小さいが、将来 JWT/OAuth2 等の実認証を追加した際に、認証処理（コスト有り）
 // より後にしかレート制限がかからず、無認証の大量アクセスから認証処理を守れなくなる（§9 の設計意図を満たせない）。
 //
-// 【HIGHEST_PRECEDENCE + 1 にする理由】
-// RequestBodySizeLimitFilter（web パッケージ）も同じ「Security より確実に先に実行する」目的で
-// Ordered.HIGHEST_PRECEDENCE を使っている。同一の @Order 値を持つフィルタ同士の相対順序は
-// Spring が保証しないため、明示的に本フィルタを 1 つ後ろへずらし、常に
-// 「本文サイズの上限チェック → レート制限」の順で実行されるようにする。この順序により、
-// 巨大な本文を送りつける攻撃がレート制限の残り回数を消費する前に 413 で弾かれる
-// （サイズ超過リクエストにレート制限枠を無駄に消費させない）。
-@Order(Ordered.HIGHEST_PRECEDENCE + 1)
+// 【HIGHEST_PRECEDENCE（最優先）にする理由】
+// RequestBodySizeLimitFilter（web パッケージ）も同じ「Security より確実に先に実行する」目的を
+// 持つが、同一の @Order 値を持つフィルタ同士の相対順序は Spring が保証しない。そこで本フィルタを
+// 指定可能な最小値（最優先）にし、サイズ上限フィルタ側を 1 つ後ろ（HIGHEST_PRECEDENCE + 1）へ
+// ずらすことで、常に「レート制限 → 本文サイズの上限チェック」の順で実行されるようにする。
+// この順序により、サイズ超過のリクエストも必ず送信元のレート制限枠を消費してから 413 で
+// 弾かれる。逆順（サイズ上限が先）だと、413 の早期リジェクトがレート制限のカウントより先に
+// 行われるため、巨大な本文を送り続ける攻撃者が一切レート制限されない抜け穴になっていた。
+@Order(Ordered.HIGHEST_PRECEDENCE)
 public class RateLimitFilter extends OncePerRequestFilter {
 
     // このクラスのログ出力に使うロガー

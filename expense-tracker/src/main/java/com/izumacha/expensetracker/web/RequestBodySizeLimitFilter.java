@@ -63,15 +63,16 @@ import org.springframework.web.filter.OncePerRequestFilter;
 //     「不正な JSON」という誤った 400 を返さないようにするため。ちょうど上限と同じサイズの正常な
 //     本文まで誤って拒否しないよう、境界では元ストリームが本当に自然終了しているかを都度確認する）。
 @Component
-// 認証・レート制限より手前で、ボディを読み取る前にサイズを弾く。RateLimitFilter と同じ理由
+// 認証より手前で、ボディを読み取る前にサイズを弾く。RateLimitFilter と同じ理由
 // （Spring Boot は Security のフィルタチェーンを既定 order = -100 で登録するため、確実に先に
-// 実行させるには指定可能な最小値 Ordered.HIGHEST_PRECEDENCE を使う必要がある）。
-// 本フィルタは指定可能な最小値をそのまま使い、RateLimitFilter 側を 1 つ後ろ
-// （Ordered.HIGHEST_PRECEDENCE + 1）にずらすことで、同一 @Order 値どうしの相対順序が
-// 不定にならないようにしている（詳細は RateLimitFilter の @Order コメントを参照）。
-// これにより「本文サイズ上限チェック → レート制限」の順が常に保証され、
-// 巨大な本文を送る攻撃にレート制限の残り回数を無駄に消費させない。
-@Order(Ordered.HIGHEST_PRECEDENCE)
+// 実行させるには最小値付近の @Order を使う必要がある）。
+// ただしレート制限（RateLimitFilter＝Ordered.HIGHEST_PRECEDENCE）よりは 1 つ後ろにずらす。
+// 同一 @Order 値どうしの相対順序は Spring が保証しないため明示的に差を付けており、これにより
+// 「レート制限 → 本文サイズの上限チェック」の順が常に保証される。逆順（本フィルタが先）だと、
+// サイズ超過リクエストがレート制限のカウントより先に 413 で打ち切られてカウントされず、
+// 巨大な本文を送り続ける攻撃者が一切レート制限されない抜け穴になっていた
+// （詳細は RateLimitFilter の @Order コメントを参照）。
+@Order(Ordered.HIGHEST_PRECEDENCE + 1)
 public class RequestBodySizeLimitFilter extends OncePerRequestFilter {
 
     // 許可するリクエスト本文の最大バイト数（application.yml の app.request.max-body-size-bytes）
