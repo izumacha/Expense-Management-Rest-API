@@ -149,6 +149,27 @@ public class RateLimitFilter extends OncePerRequestFilter {
             @Value("${app.rate-limit.trust-x-forwarded-for:false}") boolean trustXForwardedFor,
             // JSON 直列化に使う ObjectMapper
             ObjectMapper objectMapper) {
+        // 【環境変数由来の設定値を必ず検証する（§9 入力は信用しない・fail-closed）】
+        // 検証を怠ると、windowSeconds=0 は isOverLimit() のウィンドウ計算（除算）で
+        // ArithmeticException（ゼロ除算）を毎リクエスト引き起こす。本フィルタは最優先
+        // （HIGHEST_PRECEDENCE）で実行されるため、この例外は GlobalExceptionHandler に届かず
+        // コンテナ既定の 500 となり、{status, message} のエラー契約が全エンドポイントで壊れる。
+        // また capacity<=0 はすべてのリクエストが 429 になる「動いているように見えて壊れた」状態を招く。
+        // どちらも実行時に静かに壊れるより、datasource パスワード（application.yml）と同じく
+        // 起動そのものを失敗させる fail-closed に倒す。
+        // 許可数が 0 以下（1 リクエストも通せない設定）は設定ミスなので起動を失敗させる
+        if (capacity <= 0) {
+            // 設定ミスの内容と直し方が分かる日本語メッセージで起動時例外（アプリは開始しない）を投げる
+            throw new IllegalStateException(
+                    "app.rate-limit.capacity（APP_RATE_LIMIT_CAPACITY）は 1 以上を指定してください。現在値: " + capacity);
+        }
+        // 単位時間が 0 以下（ゼロ除算または負のウィンドウ）は設定ミスなので起動を失敗させる
+        if (windowSeconds <= 0) {
+            // 設定ミスの内容と直し方が分かる日本語メッセージで起動時例外（アプリは開始しない）を投げる
+            throw new IllegalStateException(
+                    "app.rate-limit.window-seconds（APP_RATE_LIMIT_WINDOW_SECONDS）は 1 以上を指定してください。現在値: "
+                            + windowSeconds);
+        }
         // 許可数をフィールドに保持する
         this.capacity = capacity;
         // 単位時間をフィールドに保持する
