@@ -36,6 +36,9 @@ import com.izumacha.expensetracker.config.SecurityConfig;
 import static org.mockito.ArgumentMatchers.any;
 // 戻り値を設定する when を取り込む（Mockito）
 import static org.mockito.Mockito.when;
+// リクエストの接続元 IP（remoteAddr）をテスト用に差し替える後処理インターフェース
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+
 // GET リクエストを組み立てる get を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 // レスポンスのステータスを検証する status を取り込む
@@ -73,6 +76,20 @@ class RateLimitFilterXffTest {
     // コントローラが依存するカテゴリサービスのモック
     @MockBean
     private CategoryService categoryService;
+
+    // 擬似リクエストの接続元 IP（remoteAddr）を指定した値に差し替える後処理を作るヘルパー。
+    // 【なぜ必要か】フィルタのカウンタはテストメソッド間で共有される（Spring コンテキストが同一のため）。
+    // フォールバック検証テストが複数あると既定の 127.0.0.1 のカウンタを取り合ってしまうので、
+    // テストごとに固有の接続元 IP を与えてカウンタの衝突を防ぐ。
+    private static RequestPostProcessor remoteAddr(String ip) {
+        // リクエストの接続元 IP を指定値に書き換えてからそのまま返す後処理を返す
+        return request -> {
+            // MockMvc が生成した擬似リクエストの接続元 IP を差し替える
+            request.setRemoteAddr(ip);
+            // 差し替え済みのリクエストを返して処理を続行させる
+            return request;
+        };
+    }
 
     // 各テスト前にサービスのモック応答を用意する
     @BeforeEach
@@ -175,6 +192,85 @@ class RateLimitFilterXffTest {
                         // 3 回目も無効なホスト名。フォールバック先 127.0.0.1 の上限を超える
                         .header("X-Forwarded-For", "invalid-hostname"))
                 // 3 回目は上限超過なので 429 になることを検証する
+                .andExpect(status().isTooManyRequests());
+    }
+
+    /**
+     * XFF の値がカンマ 1 つだけ（","）の場合に、例外を出さず getRemoteAddr()（このテストでは 10.99.0.1）
+     * にフォールバックしてレート制限がかかることを検証する境界値テスト。
+     *
+     * <p>【なぜこのケースが重要か】Java の split(",") は末尾の空トークンを捨てるため
+     * "," は空配列になり、修正前は parts[parts.length - 1] が
+     * ArrayIndexOutOfBoundsException を投げてフィルタごとクラッシュしていた
+     * （DispatcherServlet より手前なので GlobalExceptionHandler でも整形できない）。
+     */
+    // XFF がカンマのみ（","）でも例外にならず getRemoteAddr() にフォールバックすることを確認するテスト
+    @Test
+    void XFFがカンマのみでもクラッシュせずリモートアドレスにフォールバックする() throws Exception {
+        // X-Forwarded-For: "," → 末尾トークンが空文字列のため接続元 IP（10.99.0.1）がキーに、1 回目は 200
+        mockMvc.perform(get("/api/categories")
+                        // カンマ 1 つだけのヘッダ値を送る（末尾トークンが空になる境界値）
+                        .header("X-Forwarded-For", ",")
+                        // このテスト固有の接続元 IP を設定する（他テストとのカウンタ衝突防止）
+                        .with(remoteAddr("10.99.0.1")))
+                // 例外にならず 1 回目は制限内なので 200 になることを検証する
+                .andExpect(status().isOk());
+
+        // X-Forwarded-For: "," → 引き続き 10.99.0.1 がキーに、2 回目は 200
+        mockMvc.perform(get("/api/categories")
+                        // 同じカンマのみの値を再度送る（フォールバック先は同じ接続元 IP）
+                        .header("X-Forwarded-For", ",")
+                        // 同じ接続元 IP を設定する
+                        .with(remoteAddr("10.99.0.1")))
+                // 2 回目も制限内なので 200 になることを検証する
+                .andExpect(status().isOk());
+
+        // X-Forwarded-For: "," → 引き続き 10.99.0.1 がキーに、3 回目は 429
+        mockMvc.perform(get("/api/categories")
+                        // 3 回目もカンマのみの値。フォールバック先（10.99.0.1）の上限を超える
+                        .header("X-Forwarded-For", ",")
+                        // 同じ接続元 IP を設定する
+                        .with(remoteAddr("10.99.0.1")))
+                // 3 回目は上限超過なので 429 になることを検証する（フォールバック後も制限が機能する）
+                .andExpect(status().isTooManyRequests());
+    }
+
+    /**
+     * XFF の値がカンマの連続（",,,"）の場合に、例外を出さず getRemoteAddr()（このテストでは 10.99.0.2）
+     * にフォールバックしてレート制限がかかることを検証する境界値テスト。
+     *
+     * <p>"," と同様に split(",") では空配列になるケース。カンマが複数連続しても
+     * lastIndexOf 方式なら末尾の空トークン（空文字列）が得られ、looksLikeIp が拒否して
+     * 安全に getRemoteAddr() へフォールバックする（§9 fail-safe）。
+     */
+    // XFF がカンマの連続（",,,"）でも例外にならず getRemoteAddr() にフォールバックすることを確認するテスト
+    @Test
+    void XFFがカンマ連続でもクラッシュせずリモートアドレスにフォールバックする() throws Exception {
+        // X-Forwarded-For: ",,," → 末尾トークンが空文字列のため接続元 IP（10.99.0.2）がキーに、1 回目は 200
+        mockMvc.perform(get("/api/categories")
+                        // カンマだけが連続するヘッダ値を送る（すべてのトークンが空になる境界値）
+                        .header("X-Forwarded-For", ",,,")
+                        // このテスト固有の接続元 IP を設定する（他テストとのカウンタ衝突防止）
+                        .with(remoteAddr("10.99.0.2")))
+                // 例外にならず 1 回目は制限内なので 200 になることを検証する
+                .andExpect(status().isOk());
+
+        // X-Forwarded-For: ",,," → 引き続き 10.99.0.2 がキーに、2 回目は 200
+        mockMvc.perform(get("/api/categories")
+                        // 同じカンマ連続の値を再度送る（フォールバック先は同じ接続元 IP）
+                        .header("X-Forwarded-For", ",,,")
+                        // 同じ接続元 IP を設定する
+                        .with(remoteAddr("10.99.0.2")))
+                // 2 回目も制限内なので 200 になることを検証する
+                .andExpect(status().isOk());
+
+        // X-Forwarded-For: ",,," → 引き続き 10.99.0.2 がキーに、3 回目は 429
+        mockMvc.perform(get("/api/categories")
+                        // 3 回目もカンマ連続の値。フォールバック先（10.99.0.2）の上限を超える
+                        .header("X-Forwarded-For", ",,,")
+                        // 同じ接続元 IP を設定する
+                        .with(remoteAddr("10.99.0.2")))
+                // 3 回目は上限超過なので 429 になることを検証する（フォールバック後も制限が機能する）
                 .andExpect(status().isTooManyRequests());
     }
 }

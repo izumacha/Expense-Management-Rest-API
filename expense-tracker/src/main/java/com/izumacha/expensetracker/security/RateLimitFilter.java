@@ -181,10 +181,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String forwarded = request.getHeader("X-Forwarded-For");
         // ヘッダが存在し空でない場合は末尾トークン（信頼プロキシが記録した IP）を使う
         if (forwarded != null && !forwarded.isBlank()) {
-            // カンマ区切りで複数の IP が連なる場合は末尾だけ取り出してトリムする
-            String[] parts = forwarded.split(",");
-            // 末尾のトークンがレート制限キーとして使う候補 IP
-            String candidate = parts[parts.length - 1].strip();
+            // カンマ区切りで複数の IP が連なる場合は、最後のカンマより後ろ（末尾トークン）だけを取り出してトリムする。
+            // 【なぜ split(",") を使わないか】Java の split は末尾の空トークンを捨てるため、
+            // ヘッダ値がカンマだけ（例: "," や ",,,"）だと結果が空配列になり、
+            // parts[parts.length - 1] が ArrayIndexOutOfBoundsException でフィルタごとクラッシュしていた。
+            // lastIndexOf 方式なら末尾トークンが空でも空文字列が得られ、
+            // 下の looksLikeIp 判定に失敗して getRemoteAddr() へ安全にフォールバックする（§9 fail-safe）。
+            String candidate = forwarded.substring(forwarded.lastIndexOf(',') + 1).strip(); // 最後のカンマの次から末尾までを候補 IP として切り出す（カンマが無ければ全体）
             // IP アドレスの形式でない場合は偽装値または設定ミスの可能性があるためフォールバックする（§9 fail-closed）
             if (looksLikeIp(candidate)) {
                 // 正常な IP 形式ならそれをレート制限キーとして返す
