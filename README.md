@@ -34,6 +34,16 @@ docker compose up --build
 
 詳しい手順は **[expense-tracker の README](./expense-tracker/README.md)** をご覧ください。
 
+### 🧪 副プロジェクト：AgentForge（C# / .NET 10）
+
+> **雛形（スキャフォールド）段階です。** 動作するアプリケーションではなく、実装はまだプレースホルダのみです。このリポジトリの成果物を評価する際は、上記の [`expense-tracker/`](./expense-tracker/) をご覧ください。
+
+リポジトリ直下の [`src/`](./src) ・ [`tests/`](./tests) ・ `AgentForge.sln` は、将来の AI エージェント・オーケストレータ「AgentForge」の骨組みです。
+
+- **技術スタック**：C# / .NET 10 / Clean Architecture（CQRS + MediatR 想定）/ xUnit
+- **現状**：`AgentForge.Domain` ・ `AgentForge.Application` の最小レイヤと、プレースホルダのテストのみ
+- **設計書**：[`docs/DESIGN.md`](./docs/DESIGN.md)（アーキテクチャ方針と技術選定の理由）
+
 <p align="right"><a href="#expense-management-rest-api">▲ 上に戻る / Back to top</a></p>
 
 ---
@@ -67,5 +77,15 @@ docker compose up --build
 ```
 
 For detailed steps, see the **[expense-tracker README](./expense-tracker/README.md)**.
+
+### 🧪 Sub-project: AgentForge (C# / .NET 10)
+
+> **This is a scaffold.** It is not a working application — the implementation is still placeholders only. To evaluate this repository's deliverables, please see [`expense-tracker/`](./expense-tracker/) above.
+
+The [`src/`](./src), [`tests/`](./tests), and `AgentForge.sln` entries at the repository root form the skeleton of "AgentForge", a future AI agent orchestrator.
+
+- **Tech stack**: C# / .NET 10 / Clean Architecture (CQRS + MediatR planned) / xUnit
+- **Current state**: only the minimal `AgentForge.Domain` and `AgentForge.Application` layers plus placeholder tests
+- **Design document**: [`docs/DESIGN.md`](./docs/DESIGN.md) (architecture direction and the rationale behind the technology choices)
 
 <p align="right"><a href="#expense-management-rest-api">▲ Back to top / 上に戻る</a></p>
