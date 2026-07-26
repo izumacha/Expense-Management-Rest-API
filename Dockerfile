@@ -1,6 +1,6 @@
 # --- ビルドステージ ---
 # Maven と JDK 21 を含むイメージをビルド用に使用する
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM maven:3-eclipse-temurin-26 AS build
 # 作業ディレクトリを設定する
 WORKDIR /app
 # 依存解決を先に行うため pom.xml を先にコピーする
