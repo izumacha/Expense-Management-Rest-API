@@ -1,28 +1,18 @@
-## .NET
-bin/
-obj/
-out/
-*.user
-*.suo
-*.userprefs
-*.vsidx
-*.sln.docstates
-
-## IDEs
-.vs/
-.vscode/
+# Maven のビルド成果物
+target/
+# IntelliJ IDEA の設定ファイル
 .idea/
-
-## Test / coverage
-TestResults/
-coverage/
-*.trx
-*.coverage
-*.coveragexml
-
-## OS
+# Eclipse の設定ファイル
+.classpath
+.project
+.settings/
+# VS Code の設定ファイル
+.vscode/
+# OS が生成するファイル
 .DS_Store
 Thumbs.db
-
-## Local SDK
-.dotnet/
+# ログファイル
+*.log
+# 環境変数ファイル（DB パスワード等の秘密情報を含むためコミットしない。雛形は .env.example）
+.env
+.env.local
