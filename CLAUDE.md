@@ -6,44 +6,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > `CLAUDE.md` と同期**している。共通規約を変更するときは、**まず原本を改訂してから**各リポジトリへ
 > 反映すること（このファイルで共通規約だけを勝手に書き換えない）。§1〜§3 は本リポジトリ固有の内容。
 >
-> **設計ドキュメントは `docs/DESIGN.md`**（C# AgentForge のアーキテクチャ提案）ほか
-> `docs/pr-1-review-analysis.md` / `docs/ci-implementation-plan.md`。
+> **課題の棚卸しは `docs/issue-analysis.md`**（expense-tracker の機能面・セキュリティ面の分析）。
 
 ---
 
 ## 1. プロジェクト概要
 
-家計支出管理の REST API リポジトリ（2 技術の併存）。
+支出を記録し月ごとに集計する家計簿バックエンド REST API の単一プロジェクト。Java 21 / Spring Boot 3.3.5 / PostgreSQL 16 / Maven / Docker で、アプリ一式はリポジトリ直下に置く（`pom.xml` ・ `src/` ・ `Dockerfile` ・ `docker-compose.yml`）。
 
-- **主軸: `expense-tracker/`** — 支出を記録し月ごとに集計する家計簿バックエンド REST API。Java 21 / Spring Boot 3.3.5 / PostgreSQL 16 / Maven / Docker。UI を持たない API で、ドメイン語彙は日本語（カテゴリ / 支出 / 金額 / 月ごとの集計、食費・交通費・娯楽費 等）。README は日英 2 言語。
-- **副: `src/` ・ `tests/`** — C# .NET 10 の Clean Architecture スキャフォールド（AgentForge、将来の AI エージェント・オーケストレータ構想）。アーキテクチャは設計済みだがコードはほぼ雛形（プレースホルダ）段階。
+UI を持たない API で、ドメイン語彙は日本語（カテゴリ / 支出 / 金額 / 月ごとの集計、食費・交通費・娯楽費 等）。README は日英 2 言語。
 
 API レスポンスはすべて JSON。エラー形式は `{ "status": int, "message": string }`、入力検証は Jakarta Bean Validation。
 
 ## 2. コマンド
 
-### expense-tracker（Java / Maven）
+すべてリポジトリ直下で実行する。
 
 ```bash
-cd expense-tracker
 docker compose up --build        # PostgreSQL + アプリを一括起動（推奨）
 ./mvnw spring-boot:run           # 直接実行（Java 21 + PostgreSQL 16 が必要）
 ./mvnw clean package             # ビルド
+./mvnw -B verify                 # ビルド + テスト（CI と同じ検証コマンド）
 ```
 
-### AgentForge（C# / .NET 10）
-
-```bash
-dotnet restore --locked-mode                                 # 依存復元（ロック厳守）
-dotnet format --verify-no-changes --severity warn            # フォーマット検査
-dotnet build --configuration Release --no-restore            # ビルド
-dotnet test --no-build --configuration Release --logger trx  # テスト
-dotnet list package --vulnerable --include-transitive        # 脆弱性スキャン
-```
+`./mvnw -B verify` のうち `repository/` 配下のテストは Testcontainers で PostgreSQL コンテナを起動するため、**Docker デーモンが必要**（無い環境では該当テストのみ初期化エラーになる）。
 
 ## 3. アーキテクチャ
 
-### expense-tracker（`src/main/java/com/izumacha/expensetracker/`）
+### 層構成（`src/main/java/com/izumacha/expensetracker/`）
 
 層構成と責務:
 
@@ -60,13 +50,9 @@ dotnet list package --vulnerable --include-transitive        # 脆弱性スキ�
 
 設計原則: DTO 分離、ループ内個別クエリを避ける（N+1 回避、§8）、金額は `BigDecimal`。設定は `src/main/resources/application.yml`、コンテナ化は `Dockerfile` ＋ `docker-compose.yml`、Maven ラッパーは `.mvn/wrapper/`。
 
-### AgentForge（`src/` / `tests/`）
-
-C# .NET 10 の Clean Architecture（CQRS + MediatR 想定）の雛形。`AgentForge.Domain` / `AgentForge.Application` の最小レイヤ、`tests/AgentForge.UnitTests`（xUnit / Shouldly / NSubstitute、現状プレースホルダテスト）。集中管理: `global.json`（SDK 10.0.100）、`Directory.Build.props`、`Directory.Packages.props`、`AgentForge.sln`。**現状は雛形段階**であり、実装より先に `docs/DESIGN.md` の設計に従う。
-
 ### CI
 
-`.github/workflows/ci.yml` が lint ジョブと build-test ジョブを実行する（Java 側・.NET 側双方）。
+`.github/workflows/ci.yml` の `build-test` ジョブ 1 本が `./mvnw -B verify`（Temurin JDK 21）を実行し、`target/surefire-reports/*.xml` を成果物として保存する。
 
 ### 見せ方（§15 の具体化）
 

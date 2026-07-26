@@ -4,6 +4,8 @@
 対象: `expense-tracker/`（Java 21 / Spring Boot 3.3.5 / PostgreSQL 16）を主軸とする支出管理 REST API
 分析者: コードベース静的レビュー（コード変更なし・所見の棚卸しのみ）
 
+> **パスに関する注記（後日追記）**: 本ドキュメントは分析当時のディレクトリ構成に基づき `expense-tracker/...` というパスで参照している。その後リポジトリ整理により Java アプリ一式はリポジトリ直下へ移動し、C# の AgentForge は削除された。現在のパスは `expense-tracker/` を取り除いたもの（例: `expense-tracker/src/main/java/...` → `src/main/java/...`）に読み替えること。
+
 ## サマリ
 
 支出管理 API として CRUD・月次集計の基本機能は動作し、N+1 回避や DTO 分離など良い設計判断も見られる。
