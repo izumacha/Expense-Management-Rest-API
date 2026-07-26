@@ -38,11 +38,12 @@ docker compose up --build
 
 > **雛形（スキャフォールド）段階です。** 動作するアプリケーションではなく、実装はまだプレースホルダのみです。このリポジトリの成果物を評価する際は、上記の [`expense-tracker/`](./expense-tracker/) をご覧ください。
 
-リポジトリ直下の [`src/`](./src) ・ [`tests/`](./tests) ・ `AgentForge.sln` は、将来の AI エージェント・オーケストレータ「AgentForge」の骨組みです。
+リポジトリ直下の [`src/`](./src/) ・ [`tests/`](./tests/) ・ [`AgentForge.sln`](./AgentForge.sln) と、.NET のビルド設定（`global.json` ・ `Directory.Build.props` ・ `Directory.Packages.props` ・ `NuGet.config`）は、将来の**ローカル AI エージェント・オーケストレータ**「AgentForge」の骨組みです。
 
-- **技術スタック**：C# / .NET 10 / Clean Architecture（CQRS + MediatR 想定）/ xUnit
+- **技術スタック**：C# / .NET 10（Clean Architecture ・ CQRS + MediatR は設計段階で未実装）/ テストは xUnit ・ Shouldly ・ NSubstitute
 - **現状**：`AgentForge.Domain` ・ `AgentForge.Application` の最小レイヤと、プレースホルダのテストのみ
-- **設計書**：[`docs/DESIGN.md`](./docs/DESIGN.md)（アーキテクチャ方針と技術選定の理由）
+- **ビルド・テスト**：`dotnet build` ・ `dotnet test`（CI の `lint` ・ `build-test` ジョブはこの .NET ソリューションを検証します。expense-tracker のみを変更した PR でも実行されます）
+- **設計提案**：[`docs/DESIGN.md`](./docs/DESIGN.md)（アーキテクチャ方針と技術選定の理由。実装済みの内容ではなく提案です）
 
 <p align="right"><a href="#expense-management-rest-api">▲ 上に戻る / Back to top</a></p>
 
@@ -82,10 +83,11 @@ For detailed steps, see the **[expense-tracker README](./expense-tracker/README.
 
 > **This is a scaffold.** It is not a working application — the implementation is still placeholders only. To evaluate this repository's deliverables, please see [`expense-tracker/`](./expense-tracker/) above.
 
-The [`src/`](./src), [`tests/`](./tests), and `AgentForge.sln` entries at the repository root form the skeleton of "AgentForge", a future AI agent orchestrator.
+The [`src/`](./src/), [`tests/`](./tests/), and [`AgentForge.sln`](./AgentForge.sln) entries at the repository root — along with the .NET build configuration (`global.json`, `Directory.Build.props`, `Directory.Packages.props`, `NuGet.config`) — form the skeleton of "AgentForge", a future **local** AI agent orchestrator.
 
-- **Tech stack**: C# / .NET 10 / Clean Architecture (CQRS + MediatR planned) / xUnit
+- **Tech stack**: C# / .NET 10 (Clean Architecture and CQRS + MediatR are design-stage, not yet implemented) / tests use xUnit, Shouldly, and NSubstitute
 - **Current state**: only the minimal `AgentForge.Domain` and `AgentForge.Application` layers plus placeholder tests
-- **Design document**: [`docs/DESIGN.md`](./docs/DESIGN.md) (architecture direction and the rationale behind the technology choices)
+- **Build & test**: `dotnet build` and `dotnet test` (CI's `lint` and `build-test` jobs validate this .NET solution — they run even on PRs that only touch expense-tracker)
+- **Design proposal**: [`docs/DESIGN.md`](./docs/DESIGN.md) (architecture direction and the rationale behind the technology choices — a proposal, not a description of what is implemented)
 
 <p align="right"><a href="#expense-management-rest-api">▲ Back to top / 上に戻る</a></p>
