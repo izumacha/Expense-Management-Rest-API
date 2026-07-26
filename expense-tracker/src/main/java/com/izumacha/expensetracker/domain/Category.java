@@ -15,6 +15,10 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 // 楽観ロックの版番号を宣言するアノテーション
 import jakarta.persistence.Version;
+// 一意制約用の正規化キー（NFC + 小文字化）の導出ロジックを一元管理するユーティリティ
+import com.izumacha.expensetracker.validation.CategoryNameNormalizer;
+// Lombok のアクセスレベル指定（セッターを生成しないフィールドの指定に使う）
+import lombok.AccessLevel;
 // Lombok のゲッター自動生成
 import lombok.Getter;
 // Lombok の引数なしコンストラクタ自動生成
@@ -50,6 +54,25 @@ public class Category {
     @Column(nullable = false, unique = true, length = NAME_MAX_LENGTH)
     private String name;
 
+    // カテゴリ名の正規化キー（NFC 正規化 + Locale.ROOT 小文字化。CategoryNameNormalizer.normalizeKey）。
+    // 【なぜ必要か】name 列の一意制約は大文字小文字を区別するため、"Travel" と "travel" の
+    // 同時 POST がサービス層の check-then-act（existsByNameIgnoreCase）を両方すり抜けると
+    // 双方コミットされてしまい、「大文字小文字を区別しない一意性」という API 契約が恒久的に壊れる。
+    // この列の一意制約（プロバイダ非依存の通常の UNIQUE 制約）が DB 側の最終防波堤となり、
+    // レース時は片方が DataIntegrityViolationException になって CategoryService が 409 へ変換する。
+    // 【length を指定しない理由】小文字化は文字数を増やすことがある（例: U+0130 は Locale.ROOT の
+    // 小文字化で 2 コードポイントに増える）ため NAME_MAX_LENGTH(50) では収まらない場合があり、
+    // Hibernate 既定の varchar(255) をそのまま使って十分な余裕を持たせる。
+    // 【nullable=false を付けない理由】ddl-auto: update の ALTER TABLE は既存行の値を埋め戻せず、
+    // NOT NULL を付けるとデータのある既存 DB で列追加が失敗する（version 列のような静的 DEFAULT は
+    // 名前から導出する値のため使えない）。新規・更新行は必ず下の setName 経由で値が入り、
+    // 既存行に残る NULL は一意インデックス上で衝突とみなされないため制約違反にもならない。
+    // 【セッターを生成しない理由】name と独立に書き換えられると同期が壊れるため、
+    // 値の設定経路をコンストラクタと setName の 2 箇所（実体は setName 1 箇所）に閉じ込める
+    @Setter(AccessLevel.NONE)
+    @Column(unique = true)
+    private String nameKey;
+
     // 楽観ロック用の版番号。@Version が無いと Hibernate は UPDATE/DELETE の影響行数を
     // 検証せず、対象行が同時実行で既に削除されていても例外を投げずに0行更新のまま正常終了して
     // しまう（RaceGuard.guarded() の onGone 分岐が実質デッドコードになる）。この列があって
@@ -69,8 +92,19 @@ public class Category {
 
     // カテゴリ名を受け取るコンストラクタ
     public Category(String name) {
+        // 名前の設定（空白除去）と正規化キーの同期をまとめて行う setName へ委譲し、
+        // name と nameKey を更新する経路を 1 箇所に保つ（§6 DRY）
+        setName(name);
+    }
+
+    // カテゴリ名を設定する（Lombok の自動生成に代えて手書きし、正規化キーを常に同期させる）。
+    // 同名メソッドを定義すると Lombok は name のセッターを生成しないため、name を変更する
+    // すべての経路（コンストラクタ・サービス層の更新）がここを通り、nameKey の同期漏れが起きない
+    public void setName(String name) {
         // 前後の空白を取り除いてから設定する（" 食費" と "食費" が別カテゴリとして
-        // 重複判定をすり抜けないように、生成経路をこのコンストラクタ 1 箇所に統一する）
+        // 重複判定をすり抜けないように、設定経路をこのセッター 1 箇所に統一する）
         this.name = (name == null) ? null : name.strip();
+        // 一意制約用の正規化キー（NFC + 小文字化）を名前から導出して同期する（null は null のまま）
+        this.nameKey = CategoryNameNormalizer.normalizeKey(this.name);
     }
 }

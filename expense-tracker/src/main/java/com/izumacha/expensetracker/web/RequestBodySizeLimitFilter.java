@@ -86,6 +86,19 @@ public class RequestBodySizeLimitFilter extends OncePerRequestFilter {
             @Value("${app.request.max-body-size-bytes}") long maxBodySizeBytes,
             // JSON 直列化に使う ObjectMapper
             ObjectMapper objectMapper) {
+        // 【環境変数由来の設定値を必ず検証する（§9 入力は信用しない・fail-closed）】
+        // 検証を怠ると、maxBodySizeBytes<=0 は「宣言 Content-Length の事前チェック（declaredLength >
+        // maxBodySizeBytes）は素通りしうる一方、本文を 1 バイト読んだ時点で必ず上限超過になる」ため、
+        // 本文を持つすべてのリクエストが 413 になる「起動は成功するのに壊れている」状態を招く。
+        // 実行時に静かに壊れるより、RateLimitFilter の capacity / window-seconds 検証と同じく
+        // 起動そのものを失敗させる fail-closed に倒す。
+        // 上限が 0 以下（本文を一切受け付けられない設定）は設定ミスなので起動を失敗させる
+        if (maxBodySizeBytes <= 0) {
+            // 設定ミスの内容と直し方が分かる日本語メッセージで起動時例外（アプリは開始しない）を投げる
+            throw new IllegalStateException(
+                    "app.request.max-body-size-bytes（APP_MAX_BODY_SIZE_BYTES）は 1 以上を指定してください。現在値: "
+                            + maxBodySizeBytes);
+        }
         // 上限値をフィールドに保持する
         this.maxBodySizeBytes = maxBodySizeBytes;
         // ObjectMapper をフィールドに保持する
