@@ -13,7 +13,7 @@
         <!-- 親 POM のアーティファクト ID -->
         <artifactId>spring-boot-starter-parent</artifactId>
         <!-- 親 POM のバージョン（Spring Boot 3.3 系） -->
-        <version>3.3.5</version>
+        <version>4.1.0</version>
         <!-- 親 POM をリポジトリから取得する設定 -->
         <relativePath/>
     </parent>
