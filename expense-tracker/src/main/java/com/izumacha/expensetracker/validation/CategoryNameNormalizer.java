@@ -4,6 +4,8 @@ package com.izumacha.expensetracker.validation;
 
 // Unicode 正規化（合成済み/分解済みなど見た目が同じでも符号化が異なる文字列を同一視するため）に使う
 import java.text.Normalizer;
+// 実行環境の既定ロケールに左右されない小文字化（Locale.ROOT）に使う
+import java.util.Locale;
 
 /**
  * カテゴリ名の正規化（前後空白除去 + Unicode NFC 正規化）を一箇所にまとめたユーティリティ。
@@ -34,5 +36,23 @@ public final class CategoryNameNormalizer {
         }
         // strip() で前後の空白（Unicode対応）を除去してから NFC 正規化する
         return Normalizer.normalize(rawName.strip(), Normalizer.Form.NFC);
+    }
+
+    /**
+     * 一意制約用の正規化キー（{@link #normalize(String)} の結果を {@link Locale#ROOT} で
+     * 小文字化したもの）を返す。null はそのまま返す。
+     *
+     * <p>{@code existsByNameIgnoreCase} による大文字小文字を区別しない重複チェックは
+     * check-then-act のため同時実行ではすり抜けうる。{@code Category.nameKey} 列の一意制約が
+     * この関数と同じ規則で導出したキー同士を比較する最終防波堤（DB 側の砦）になるよう、
+     * キーの導出ロジックをここへ一元化する（§6 一元管理）。小文字化に {@link Locale#ROOT} を
+     * 使うのは、実行環境の既定ロケール（例: トルコ語ロケールの I → ı 変換）に結果が左右されない
+     * 移植可能な変換にするため（§10）。
+     */
+    public static String normalizeKey(String rawName) {
+        // まず既存の正規化（前後空白除去 + NFC）を適用する
+        String normalized = normalize(rawName);
+        // null はそのまま返し、それ以外はロケール非依存の小文字化でキーへ変換して返す
+        return (normalized == null) ? null : normalized.toLowerCase(Locale.ROOT);
     }
 }

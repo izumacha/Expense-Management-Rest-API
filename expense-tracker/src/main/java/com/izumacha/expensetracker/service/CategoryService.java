@@ -199,12 +199,12 @@ public class CategoryService {
     // NFCに揃っていることが前提）。
     // 大文字小文字の違い（"Travel"/"travel"）は existsByNameIgnoreCase 側で同一視しており、
     // ここでは大文字小文字を変えない（保存される表示名の見た目を尊重するため）。
-    // 注: DB の一意制約(@Column(unique=true))自体は大文字小文字を区別するため、
-    // 大文字小文字だけが異なる名前が真に同時作成された場合の最終防波堤にはならない
-    // （NFC正規化はDTO層で保存前に揃えているため一意制約が最終防波堤として機能するが、
-    // 大文字小文字はここで揃えていないため）。頻度が極めて低い理論上のレースであり、
-    // 発生しても409ではなく後勝ちで2件目が別カテゴリとして作成されるだけで実害は小さいため、
-    // MVPの割り切りとしてDB制約の変更（式インデックス等、DBプロバイダ依存になりうる）までは行わない。
+    // 注: name 列の一意制約(@Column(unique=true))自体は大文字小文字を区別するが、
+    // 大文字小文字だけが異なる名前が真に同時作成されるレース（"Travel"/"travel"）は、
+    // NFC 正規化 + Locale.ROOT 小文字化した Category.nameKey 列の一意制約
+    // （プロバイダ非依存の通常の UNIQUE 制約。式インデックス等の DB 固有機能は使わない）が
+    // 最終防波堤として弾く。制約違反は create の catch / update の RaceGuard が
+    // DataIntegrityViolationException を 409（DuplicateException）へ変換する。
     private static String validateNormalizedNameLength(String name) {
         // NFC 正規化は文字数を増やすことがある（合成除外文字。例: U+0958 は NFC でも
         // U+0915+U+093C の 2 文字に分解されたままになる）ため、DTO の @MaxCodePoints(max=50) を

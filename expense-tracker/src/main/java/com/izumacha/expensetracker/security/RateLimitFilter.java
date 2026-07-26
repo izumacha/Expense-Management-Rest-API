@@ -188,8 +188,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String clientKey = resolveClientKey(request);
         // 上限超過なら 429 を返して処理を打ち切る
         if (isOverLimit(clientKey)) {
-            // 再試行までの目安秒数をヘッダで伝える
-            response.setHeader("Retry-After", String.valueOf(windowSeconds));
+            // 再試行までの目安秒数（現在の固定ウィンドウの残り秒数）をヘッダで伝える。
+            // 固定値 windowSeconds を返すと、ウィンドウ終了間際に 429 を受けたクライアントまで
+            // まるまる 1 ウィンドウ分待たされてしまうため、実際に制限が解けるまでの残り時間を返す
+            response.setHeader("Retry-After", String.valueOf(remainingWindowSeconds()));
             // 超過の安全な文言で 429 応答を書き出す
             ApiErrorWriter.write(response, objectMapper, HttpStatus.TOO_MANY_REQUESTS, ErrorMessages.TOO_MANY_REQUESTS);
             // 後続のフィルタ・コントローラへは進ませない
@@ -197,6 +199,18 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
         // 上限内なので後続の処理へ進める
         filterChain.doFilter(request, response);
+    }
+
+    // 現在の固定ウィンドウが終わる（＝レート制限が解ける）までの残り秒数を返す。
+    // 現在時刻（秒）をウィンドウ長で割った余りが「現在ウィンドウ内で経過した秒数」なので、
+    // ウィンドウ長からその余りを引いた値が残り秒数になる（isOverLimit のウィンドウ番号計算と
+    // 同じ固定ウィンドウの区切りに揃える）。余り 0（境界ちょうど）では windowSeconds が返り
+    // 計算上 0 にはならないが、Retry-After: 0 を返さない契約を明示するため下限 1 で clamp する
+    private long remainingWindowSeconds() {
+        // 現在時刻を秒単位で取得する
+        long nowSeconds = System.currentTimeMillis() / 1000;
+        // ウィンドウ長から経過秒数を引いた残り秒数を、下限 1 秒で clamp して返す
+        return Math.max(1, windowSeconds - (nowSeconds % windowSeconds));
     }
 
     // 送信元を識別するキーを解決する。

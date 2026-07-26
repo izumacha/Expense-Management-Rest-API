@@ -261,6 +261,29 @@ class CategoryServiceTest {
                 .isInstanceOf(DuplicateException.class);
     }
 
+    // create: 大文字小文字だけが異なる名前（"Travel"/"travel"）の同時作成レースで、事前チェックを
+    // すり抜けても Category.nameKey（NFC + 小文字化した一意制約列）の制約違反が 409 へ変換される
+    // ことを検証する。name 列の一意制約は大文字小文字を区別するため防波堤にならず、nameKey の
+    // 制約違反（DataIntegrityViolationException）が既存の catch で DuplicateException になる経路の確認
+    @Test
+    void create_大文字小文字違いの同時作成もDB制約経由で409例外() {
+        // 既存の "travel" と大文字小文字だけが異なる名前で作成リクエストを用意する
+        CreateCategoryRequest request = new CreateCategoryRequest("Travel");
+        // 事前の同名チェックは false（同時実行ですり抜けた状況）を返すようモックする
+        when(categoryRepository.existsByNameIgnoreCase("Travel")).thenReturn(false);
+        // 保存時に nameKey 列（小文字化キー "travel" 同士の衝突）の一意制約違反が起きるようモックする
+        when(categoryRepository.save(any(Category.class)))
+                // DB の一意制約違反例外を投げる
+                .thenThrow(new DataIntegrityViolationException("name_key unique violation"));
+
+        // create 呼び出しで DuplicateException（409 相当）に変換されることを検証する
+        assertThatThrownBy(() -> categoryService.create(request))
+                // 例外型が DuplicateException であることを確認する
+                .isInstanceOf(DuplicateException.class)
+                // 生の DB メッセージではなく安全な日本語文言に変換されていることを確認する
+                .hasMessage(ErrorMessages.CATEGORY_NAME_DUPLICATE);
+    }
+
     // findById: 存在する ID なら DTO を返すことを検証する
     @Test
     void findById_存在すればDTOを返す() {

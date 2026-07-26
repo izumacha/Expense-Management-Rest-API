@@ -196,7 +196,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     // 未定義パス（例：存在しないURLへのアクセス）を404として {status, message} 契約に統一するハンドラ。
     // application.yml の throw-exception-if-no-handler-found / add-mappings:false と対で、
-    // Spring Boot 既定の BasicErrorController（{timestamp,status,error,path} 形式）へ委譲させない。
+    // ハンドラ未検出のケースをエラーページ（/error）へ委譲させずここで整形する。
+    // なおこの設定だけでは /error への直接アクセスやフィルタ層から漏れた例外（ERROR ディスパッチ）は
+    // 依然として /error へ届き、Spring Boot 既定の BasicErrorController だと
+    // {timestamp,status,error,path} 形式の契約外応答になるため、その経路は
+    // web/ApiErrorController が同じ {status, message} 契約で処理する。
     @Override
     protected ResponseEntity<Object> handleNoHandlerFoundException(
             // 発生したハンドラ未検出例外

@@ -64,4 +64,31 @@ class CategoryNameNormalizerTest {
         // 空白除去とNFC正規化の両方が適用され、"が"(NFC合成表現)のみが残ることを確認する
         assertThat(CategoryNameNormalizer.normalize(rawInput)).isEqualTo("が");
     }
+
+    // normalizeKey: null はそのまま null で返すことを検証する（normalize と同じ null の扱い）
+    @Test
+    void normalizeKey_nullはそのままnullを返す() {
+        // null を渡すと null が返ることを確認する
+        assertThat(CategoryNameNormalizer.normalizeKey(null)).isNull();
+    }
+
+    // normalizeKey: 大文字を含む名前が小文字化されたキーになることを検証する。
+    // "Travel"/"travel" の同時作成レースを Category.nameKey の一意制約で弾く前提となる導出規則
+    @Test
+    void normalizeKey_大文字を小文字化したキーを返す() {
+        // 大文字を含む名前からキーを導出すると、小文字化された値になることを確認する
+        assertThat(CategoryNameNormalizer.normalizeKey("Travel")).isEqualTo("travel");
+    }
+
+    // normalizeKey: 空白除去・NFC 正規化・小文字化のすべてが同時に効くことを検証する
+    // （大文字小文字と符号化の両方が異なる「見た目が同じ」名前が同一キーへ収束することの確認）
+    @Test
+    void normalizeKey_空白除去とNFC正規化と小文字化を同時に行う() {
+        // "ガス代"（NFC）の先頭文字を NFD 分解表現へ変えたうえで、前後に空白と大文字英字を混ぜた入力を用意する
+        String nfd = Normalizer.normalize("ガ", Normalizer.Form.NFD);
+        String rawInput = " " + nfd + "ス代A ";
+
+        // 空白除去・NFC 合成・小文字化がすべて適用されたキーになることを確認する
+        assertThat(CategoryNameNormalizer.normalizeKey(rawInput)).isEqualTo("ガス代a");
+    }
 }
