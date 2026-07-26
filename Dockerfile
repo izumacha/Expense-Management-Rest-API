@@ -14,7 +14,7 @@ RUN mvn -B -q clean package -DskipTests
 
 # --- 実行ステージ ---
 # 実行には軽量な JRE 21 イメージを使用する
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 # 作業ディレクトリを設定する
 WORKDIR /app
 # 最小権限の原則に従い、アプリ実行用の非 root ユーザーとグループを作成する
