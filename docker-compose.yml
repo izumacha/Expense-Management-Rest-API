@@ -3,7 +3,7 @@ services:
   # PostgreSQL データベースサービス
   db:
     # 使用するイメージ（PostgreSQL 16）
-    image: postgres:16
+    image: postgres:18
     # コンテナ名を分かりやすく固定する
     container_name: expense-tracker-db
     # DB の初期化用環境変数
