@@ -170,10 +170,30 @@ public class RequestBodySizeLimitFilter extends OncePerRequestFilter {
             // Content-Type に文字コード指定があればそれを使い、無ければサーブレット既定の ISO-8859-1 を使う
             // （Servlet 仕様の既定値。本 API は JSON のみを扱うため通常は Content-Type で UTF-8 が指定される）
             String encoding = getCharacterEncoding();
-            // 文字コード名を Charset へ変換する（未指定時は ISO-8859-1 をフォールバックにする）
-            Charset charset = (encoding != null) ? Charset.forName(encoding) : StandardCharsets.ISO_8859_1;
+            // 文字コード名を Charset へ変換する（未指定時・不正名時は ISO-8859-1 をフォールバックにする）
+            Charset charset = resolveCharsetOrDefault(encoding);
             // 上限付きストリーム（getInputStream() 経由。キャッシュされたものと同一）を文字読み取りへ包む
             return new BufferedReader(new InputStreamReader(getInputStream(), charset));
+        }
+
+        // クライアント指定の文字コード名を安全に Charset へ解決するヘルパー。
+        // 【なぜ必要か】getCharacterEncoding() は Content-Type ヘッダの charset トークンを未検証のまま
+        // 返すため、"bogus!" のような不正名を Charset.forName() に渡すと IllegalCharsetNameException /
+        // UnsupportedCharsetException（未検査例外）が送出され、クライアント入力起因なのに 500 として
+        // 扱われてしまう。壊れた入力ではクラッシュさせず既定値へフォールバックする（§9 の入力検証方針）。
+        private static Charset resolveCharsetOrDefault(String encoding) {
+            // 未指定ならサーブレット既定の ISO-8859-1 を返す
+            if (encoding == null) {
+                return StandardCharsets.ISO_8859_1;
+            }
+            try {
+                // 指定された文字コード名を Charset へ変換して返す
+                return Charset.forName(encoding);
+            } catch (IllegalArgumentException ex) {
+                // 不正な名前（IllegalCharsetNameException）・未対応の文字コード（UnsupportedCharsetException）は
+                // いずれも IllegalArgumentException のサブクラス。サーブレット既定の ISO-8859-1 へフォールバックする
+                return StandardCharsets.ISO_8859_1;
+            }
         }
     }
 

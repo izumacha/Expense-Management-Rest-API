@@ -186,12 +186,18 @@ public class RateLimitFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         // 送信元を識別するキーを取得する（trust-x-forwarded-for 設定により直接 IP か X-Forwarded-For かを切り替える）
         String clientKey = resolveClientKey(request);
+        // 現在時刻（秒）をここで一度だけ取得し、上限判定と Retry-After 計算の両方で共有する。
+        // 【なぜ共有するか】判定とヘッダ計算で別々に時刻を取得すると、その間にウィンドウが切り替わった場合、
+        // 「旧ウィンドウ基準で 429 と判定したのに、新ウィンドウ基準のほぼ満額（windowSeconds 秒）の
+        // Retry-After を返す」不整合が起こり、実際には制限が解けているのにクライアントを最大
+        // 1 ウィンドウ分余計に待たせてしまう。同一時刻を使えば両者は常に同じウィンドウ基準になる
+        long nowSeconds = System.currentTimeMillis() / 1000;
         // 上限超過なら 429 を返して処理を打ち切る
-        if (isOverLimit(clientKey)) {
+        if (isOverLimit(clientKey, nowSeconds)) {
             // 再試行までの目安秒数（現在の固定ウィンドウの残り秒数）をヘッダで伝える。
             // 固定値 windowSeconds を返すと、ウィンドウ終了間際に 429 を受けたクライアントまで
             // まるまる 1 ウィンドウ分待たされてしまうため、実際に制限が解けるまでの残り時間を返す
-            response.setHeader("Retry-After", String.valueOf(remainingWindowSeconds()));
+            response.setHeader("Retry-After", String.valueOf(remainingWindowSeconds(nowSeconds)));
             // 超過の安全な文言で 429 応答を書き出す
             ApiErrorWriter.write(response, objectMapper, HttpStatus.TOO_MANY_REQUESTS, ErrorMessages.TOO_MANY_REQUESTS);
             // 後続のフィルタ・コントローラへは進ませない
@@ -201,14 +207,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    // 現在の固定ウィンドウが終わる（＝レート制限が解ける）までの残り秒数を返す。
-    // 現在時刻（秒）をウィンドウ長で割った余りが「現在ウィンドウ内で経過した秒数」なので、
-    // ウィンドウ長からその余りを引いた値が残り秒数になる（isOverLimit のウィンドウ番号計算と
-    // 同じ固定ウィンドウの区切りに揃える）。余り 0（境界ちょうど）では windowSeconds が返り
-    // 計算上 0 にはならないが、Retry-After: 0 を返さない契約を明示するため下限 1 で clamp する
-    private long remainingWindowSeconds() {
-        // 現在時刻を秒単位で取得する
-        long nowSeconds = System.currentTimeMillis() / 1000;
+    // 指定時刻が属する固定ウィンドウが終わる（＝レート制限が解ける）までの残り秒数を返す。
+    // 時刻（秒）をウィンドウ長で割った余りが「そのウィンドウ内で経過した秒数」なので、
+    // ウィンドウ長からその余りを引いた値が残り秒数になる（呼び出し側から isOverLimit と
+    // 同じ nowSeconds を受け取ることで、判定とヘッダ計算のウィンドウ基準を一致させる）。
+    // 余り 0（境界ちょうど）では windowSeconds が返り計算上 0 にはならないが、
+    // Retry-After: 0 を返さない契約を明示するため下限 1 で clamp する
+    private long remainingWindowSeconds(long nowSeconds) {
         // ウィンドウ長から経過秒数を引いた残り秒数を、下限 1 秒で clamp して返す
         return Math.max(1, windowSeconds - (nowSeconds % windowSeconds));
     }
@@ -280,9 +285,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     // 送信元のカウントを 1 増やし、単位時間内の上限を超えたかを返す
-    private boolean isOverLimit(String clientKey) {
-        // 現在時刻が属する固定ウィンドウ番号（秒を単位時間で割った商）を求める
-        long currentWindow = System.currentTimeMillis() / 1000 / windowSeconds;
+    // （nowSeconds は呼び出し側が一度だけ取得した現在時刻。Retry-After 計算と同じ値を共有する）
+    private boolean isOverLimit(String clientKey, long nowSeconds) {
+        // 指定時刻が属する固定ウィンドウ番号（秒を単位時間で割った商）を求める
+        long currentWindow = nowSeconds / windowSeconds;
         // マップが肥大化しないよう、上限に達したら古いウィンドウの項目を掃除する。
         // ただし O(N) のスキャンが毎リクエスト走るのを防ぐため、ウィンドウが切り替わったときだけ掃除する（1 ウィンドウ 1 回に抑制）。
         if (counters.size() >= MAX_TRACKED_CLIENTS) {
