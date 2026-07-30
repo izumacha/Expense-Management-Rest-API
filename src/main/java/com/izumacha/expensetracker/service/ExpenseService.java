@@ -94,6 +94,19 @@ public class ExpenseService {
             EntityManager entityManager,
             // application.yml の一覧ページング上限値をそのまま注入する（未設定時は既定の100件）
             @Value("${spring.data.web.pageable.max-page-size:100}") int summaryMaxCategories) {
+        // 【設定値由来の値を必ず検証する（§9 入力は信用しない・fail-closed）】
+        // 検証を怠ると、0 以下の設定でもアプリは起動に成功する一方、summary() の
+        // PageRequest.of(0, summaryMaxCategories) が毎回 IllegalArgumentException を投げ、
+        // サーバ側の設定ミスなのに 400（クライアント起因の不正リクエスト）として返ってしまう。
+        // 実行時に静かに壊れるより、RateLimitFilter / RequestBodySizeLimitFilter の設定値検証と
+        // 同じく起動そのものを失敗させる fail-closed に倒す。
+        // 上限が 0 以下（内訳を 1 件も返せない設定）は設定ミスなので起動を失敗させる
+        if (summaryMaxCategories <= 0) {
+            // 設定ミスの内容と直し方が分かる日本語メッセージで起動時例外（アプリは開始しない）を投げる
+            throw new IllegalStateException(
+                    "spring.data.web.pageable.max-page-size は 1 以上を指定してください。現在値: "
+                            + summaryMaxCategories);
+        }
         // 支出リポジトリをフィールドに設定する
         this.expenseRepository = expenseRepository;
         // カテゴリリポジトリをフィールドに設定する
