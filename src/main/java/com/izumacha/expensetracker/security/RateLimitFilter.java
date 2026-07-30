@@ -267,11 +267,45 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 // 正常な IP 形式ならそれをレート制限キーとして返す
                 return candidate;
             }
-            // 不正な形式の場合は警告を出して直接接続元 IP に切り替える
-            log.debug("X-Forwarded-For の末尾値 '{}' が IP 形式でないため getRemoteAddr() にフォールバックします", candidate);
+            // 不正な形式の場合はデバッグログを出して直接接続元 IP に切り替える。
+            // 候補値は IP 検証に落ちた攻撃者制御下の文字列なので、そのまま出さず無害化してから記録する
+            // （改行や制御文字によるログ偽装・ログ肥大を防ぐ。§9 ログに残す前のマスク／伏字化）
+            log.debug("X-Forwarded-For の末尾値 '{}'（元の長さ {} 文字）が IP 形式でないため getRemoteAddr() にフォールバックします",
+                    sanitizeForLog(candidate), candidate.length());
         }
         // ヘッダが無い場合または不正な形式の場合は接続元 IP をそのまま使う
         return request.getRemoteAddr();
+    }
+
+    // ログへ記録する外部由来の値の最大文字数（超過分は切り捨てる。ログ肥大の抑止用）。
+    // 同一パッケージのテストから境界値を参照できるようパッケージプライベートにしている
+    static final int LOG_VALUE_MAX_LENGTH = 64;
+
+    // 攻撃者が制御できるヘッダ由来の値を、ログへ出す前に無害化するヘルパー。
+    // 【なぜ必要か】IP 検証に落ちた候補値は任意の文字列であり、CR/LF を含めると偽のログ行を
+    // 挿入できてしまい（ログ偽装）、長大な値はログ肥大による二次的な資源枯渇を招く。
+    // そこで (1) 制御文字（改行・タブ・エスケープ等）を '_' に置換し、(2) 長さを
+    // LOG_VALUE_MAX_LENGTH に打ち切ってから記録する。正規表現ではなく 1 文字ずつの走査に
+    // しているのは、信頼できない入力へ正規表現を当てない方針（§9 ReDoS 回避）に揃えるため。
+    // 同一パッケージのテストから直接検証できるようパッケージプライベートにしている
+    static String sanitizeForLog(String value) {
+        // null は文字列 "null" として返す（呼び出し元で NPE にしないための防御）
+        if (value == null) {
+            return "null";
+        }
+        // 出力する長さを上限で打ち切る（超過分はログに出さない）
+        int length = Math.min(value.length(), LOG_VALUE_MAX_LENGTH);
+        // 無害化後の文字を組み立てるバッファを用意する
+        StringBuilder sanitized = new StringBuilder(length);
+        // 打ち切り後の範囲を 1 文字ずつ走査する
+        for (int i = 0; i < length; i++) {
+            // 現在位置の文字を取り出す
+            char c = value.charAt(i);
+            // 制御文字（改行・復帰・タブ・エスケープ等の ISO 制御文字）は '_' に置換し、それ以外はそのまま残す
+            sanitized.append(Character.isISOControl(c) ? '_' : c);
+        }
+        // 無害化した文字列を返す
+        return sanitized.toString();
     }
 
     // 引数が IPv4 または IPv6 アドレスの形式に見えるかを確認する（DNS 名前解決を行わない）。
