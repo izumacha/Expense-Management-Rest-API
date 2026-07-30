@@ -27,6 +27,8 @@ import com.izumacha.expensetracker.exception.NotFoundException;
 import com.izumacha.expensetracker.repository.CategoryRepository;
 // 支出リポジトリを参照する（削除時にカテゴリが支出から使用中か確認するため）
 import com.izumacha.expensetracker.repository.ExpenseRepository;
+// 重複チェック用の正規化キー（NFC + Locale.ROOT 小文字化）の導出を Category.nameKey と共有するユーティリティ
+import com.izumacha.expensetracker.validation.CategoryNameNormalizer;
 // JPA の永続化コンテキスト操作用エンティティマネージャ（楽観ロック失敗後の後始末に使う）
 import jakarta.persistence.EntityManager;
 // 一意制約違反を検出する例外（create() の事前チェックすり抜けを捕捉する。update()/delete() は
@@ -72,8 +74,10 @@ public class CategoryService {
         // ここではその正規化後の名前がDB列の文字数上限に収まっているかを検証する
         // （create/updateで重複しないよう一元化）
         String normalizedName = validateNormalizedNameLength(request.name());
-        // 同名カテゴリが既に存在する場合は重複例外を投げる（409）。大文字小文字を区別せず判定する
-        if (categoryRepository.existsByNameIgnoreCase(normalizedName)) {
+        // 同名カテゴリが既に存在する場合は重複例外を投げる（409）。
+        // 判定キーは DB の一意制約列（Category.nameKey）と同じ normalizeKey で導出し、
+        // 事前チェックと制約の「同名」の定義を一致させる（詳細は CategoryRepository のコメント参照）
+        if (categoryRepository.existsByNameKey(CategoryNameNormalizer.normalizeKey(normalizedName))) {
             // 入力値を含めない安全な文言で重複を示す例外を送出する
             throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
         }
@@ -112,8 +116,10 @@ public class CategoryService {
                 .orElseThrow(() -> new NotFoundException(ErrorMessages.CATEGORY_NOT_FOUND));
         // create と同じ検証（DTO層で正規化済みの名前が文字数上限に収まっているか）
         String normalizedName = validateNormalizedNameLength(request.name());
-        // 自分自身を除いた同名カテゴリが既に存在する場合は重複例外を投げる（409）。大文字小文字を区別せず判定する
-        if (categoryRepository.existsByNameIgnoreCaseAndIdNot(normalizedName, id)) {
+        // 自分自身を除いた同名カテゴリが既に存在する場合は重複例外を投げる（409）。
+        // create と同じく、DB の一意制約列（Category.nameKey）と同一の normalizeKey で導出した
+        // 正規化キーで判定する（事前チェックと制約の「同名」の定義を一致させる）
+        if (categoryRepository.existsByNameKeyAndIdNot(CategoryNameNormalizer.normalizeKey(normalizedName), id)) {
             // 入力値を含めない安全な文言で重複を示す例外を送出する
             throw new DuplicateException(ErrorMessages.CATEGORY_NAME_DUPLICATE);
         }
@@ -194,11 +200,12 @@ public class CategoryService {
     // 「NFC正規化で文字数が伸びて上限を超える」ケース（下記コメント参照）。
     // 濁点/半濁点付き仮名などは合成済み(NFC)と分解済み(NFD)の2通りの符号化で
     // 見た目が同一の文字列を作れてしまうが、DTO側で既にNFCに揃えられているため、
-    // ここでの existsByNameIgnoreCase / existsByNameIgnoreCaseAndIdNot による重複チェックは
+    // ここでの existsByNameKey / existsByNameKeyAndIdNot による重複チェックは
     // 見た目が同じ名前を確実に同一視できる（DBの一意制約も含め単純な文字列比較のため、
     // NFCに揃っていることが前提）。
-    // 大文字小文字の違い（"Travel"/"travel"）は existsByNameIgnoreCase 側で同一視しており、
-    // ここでは大文字小文字を変えない（保存される表示名の見た目を尊重するため）。
+    // 大文字小文字の違い（"Travel"/"travel"）は normalizeKey（Locale.ROOT 小文字化）で導出した
+    // キー同士の比較で同一視しており、ここでは大文字小文字を変えない
+    // （保存される表示名の見た目を尊重するため）。
     // 注: name 列の一意制約(@Column(unique=true))自体は大文字小文字を区別するが、
     // 大文字小文字だけが異なる名前が真に同時作成されるレース（"Travel"/"travel"）は、
     // NFC 正規化 + Locale.ROOT 小文字化した Category.nameKey 列の一意制約

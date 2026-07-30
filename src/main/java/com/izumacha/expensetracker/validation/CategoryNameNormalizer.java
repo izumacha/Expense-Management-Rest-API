@@ -42,10 +42,12 @@ public final class CategoryNameNormalizer {
      * 一意制約用の正規化キー（{@link #normalize(String)} の結果を {@link Locale#ROOT} で
      * 小文字化したもの）を返す。null はそのまま返す。
      *
-     * <p>{@code existsByNameIgnoreCase} による大文字小文字を区別しない重複チェックは
+     * <p>{@code existsByNameKey} による大文字小文字を区別しない重複チェックは
      * check-then-act のため同時実行ではすり抜けうる。{@code Category.nameKey} 列の一意制約が
      * この関数と同じ規則で導出したキー同士を比較する最終防波堤（DB 側の砦）になるよう、
-     * キーの導出ロジックをここへ一元化する（§6 一元管理）。小文字化に {@link Locale#ROOT} を
+     * キーの導出ロジックをここへ一元化する（§6 一元管理。サービス層の事前チェックも
+     * この関数で導出したキーを {@code existsByNameKey} へ渡すため、事前チェックと
+     * 一意制約が常に同じ「同名」の定義を共有する）。小文字化に {@link Locale#ROOT} を
      * 使うのは、実行環境の既定ロケール（例: トルコ語ロケールの I → ı 変換）に結果が左右されない
      * 移植可能な変換にするため（§10）。
      */
