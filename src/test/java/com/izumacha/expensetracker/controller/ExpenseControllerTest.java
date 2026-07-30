@@ -234,6 +234,34 @@ class ExpenseControllerTest {
         assertThat(passed.getPageSize()).isEqualTo(5);
     }
 
+    // GET: size 未指定時の既定ページサイズが application.yml の
+    // spring.data.web.pageable.default-page-size（20）から適用されることを検証する。
+    // 【なぜこのテストが必要か】以前は @PageableDefault(size = 20) がこの既定値を重複定義
+    // しており、YAML 側だけを変更すると値がズレる余地があった。アノテーションを撤去して
+    // YAML を唯一の参照元にしたため、既定値 20 が実際に効いていることをここで固定する
+    // （§6 一元管理。@WebMvcTest スライスでも Spring Data Web の自動設定と YAML が読まれる）
+    @Test
+    void 支出一覧_size未指定なら既定ページサイズ20が適用される() throws Exception {
+        // サービスが空のページを返すようモックする
+        when(expenseService.search(any(), any(), any()))
+                // 先頭ページ・サイズ 20 の空ページを返す
+                .thenReturn(new PageResponse<>(List.of(), 0, 20, 0, 0));
+
+        // page / size を付けずに一覧を GET する（既定値が使われるはず）
+        mockMvc.perform(get("/api/expenses"))
+                // ステータスが 200 であることを検証する
+                .andExpect(status().isOk());
+
+        // サービスへ渡された Pageable を捕捉するキャプチャを用意する
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        // search 呼び出しの Pageable 引数を捕捉する（month / categoryId は任意一致）
+        verify(expenseService).search(any(), any(), pageableCaptor.capture());
+        // 捕捉した Pageable の件数が YAML の既定値 20 であることを検証する
+        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(20);
+        // ページ番号は先頭ページ（index 0）であることを検証する
+        assertThat(pageableCaptor.getValue().getPageNumber()).isEqualTo(0);
+    }
+
     // GET /summary: month 指定で 200 と集計が返ることを検証する
     @Test
     void 月次集計_200で返る() throws Exception {

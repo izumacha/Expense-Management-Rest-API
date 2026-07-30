@@ -56,7 +56,7 @@ public class Category {
 
     // カテゴリ名の正規化キー（NFC 正規化 + Locale.ROOT 小文字化。CategoryNameNormalizer.normalizeKey）。
     // 【なぜ必要か】name 列の一意制約は大文字小文字を区別するため、"Travel" と "travel" の
-    // 同時 POST がサービス層の check-then-act（existsByNameIgnoreCase）を両方すり抜けると
+    // 同時 POST がサービス層の check-then-act（existsByNameKey）を両方すり抜けると
     // 双方コミットされてしまい、「大文字小文字を区別しない一意性」という API 契約が恒久的に壊れる。
     // この列の一意制約（プロバイダ非依存の通常の UNIQUE 制約）が DB 側の最終防波堤となり、
     // レース時は片方が DataIntegrityViolationException になって CategoryService が 409 へ変換する。

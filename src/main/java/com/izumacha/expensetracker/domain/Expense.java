@@ -40,10 +40,19 @@ import lombok.Setter;
 @Entity
 // テーブル名と、よく絞り込む列のインデックスを指定する。
 // 一覧・月次集計は spent_on の範囲条件／並び替え／GROUP BY で常に使うため先頭に置く。
+// 【なぜ (spent_on, id) の複合インデックスか】一覧クエリ（ExpenseRepository.search）は
+// ORDER BY spentOn DESC, id DESC ＋ LIMIT（ページング）で取得する。spent_on 単独の
+// インデックスだと同一日付の行の並びが id で定まらず、DB はページごとに追加のソートを
+// 要する。並び順と同じ列順（spent_on, id）の複合インデックスなら、範囲絞り込みと
+// 並び替えの両方をインデックス走査だけでまかなえる（複合インデックスの列順の意識。§8）。
+// spent_on 単独の絞り込み（月次集計の範囲条件）も複合インデックスの先頭列で引けるため、
+// 旧 idx_expenses_spent_on（単独列）は冗長になり、これを置き換える。
 // category_id は外部キーだが PostgreSQL は FK に自動インデックスを張らないため明示する。
 // いずれも全件走査（sequential scan）を避けるためのもの（共通規約 §8）。
+// 注: スキーマは ddl-auto 管理のため、この定義変更が自動で反映されるのは新規作成スキーマのみ
+// （既存 DB では旧インデックスの削除・新インデックスの作成は自動では行われない）。
 @Table(name = "expenses", indexes = {
-    @Index(name = "idx_expenses_spent_on", columnList = "spent_on"),
+    @Index(name = "idx_expenses_spent_on_id", columnList = "spent_on, id"),
     @Index(name = "idx_expenses_category_id", columnList = "category_id")
 })
 // ゲッターを自動生成

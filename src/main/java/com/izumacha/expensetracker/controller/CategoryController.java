@@ -21,8 +21,6 @@ import java.net.URI;
 import org.springframework.data.domain.Pageable;
 // 並び順（どの列で昇順/降順に並べるか）を表す型
 import org.springframework.data.domain.Sort;
-// 一覧取得時の既定ページサイズを指定するアノテーション
-import org.springframework.data.web.PageableDefault;
 // HTTP レスポンス全体を表すクラス
 import org.springframework.http.ResponseEntity;
 // DELETE マッピング用アノテーション
@@ -83,8 +81,11 @@ public class CategoryController {
     // カテゴリ一覧をページ単位で取得する（成功時 200）
     @GetMapping
     public PageResponse<CategoryResponse> list(
-            // ページ指定（page / size。size 未指定時は既定 20。上限は application.yml で制限）
-            @PageableDefault(size = 20) Pageable pageable) {
+            // ページ指定（page / size）。size 未指定時の既定値（20）・上限（100）はともに
+            // application.yml の spring.data.web.pageable が唯一の参照元（§6 一元管理。
+            // 以前は @PageableDefault(size = 20) で既定値を重複定義しており、設定変更時に
+            // YAML とアノテーションの値がズレる余地があった）
+            Pageable pageable) {
         // クライアント由来の sort クエリパラメータは無視し、id 昇順に固定する。
         // 未検証の並び順が下位クエリへ届くのを Web 境界で防ぎ（§9）、ページングの決定性を担保する（§8）。
         Pageable sanitized = PageableSanitizer.withFixedSort(pageable, CATEGORY_LIST_SORT);
