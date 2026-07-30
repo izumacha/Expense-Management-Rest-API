@@ -23,8 +23,6 @@ import java.net.URI;
 import org.springframework.data.domain.Pageable;
 // 並び順（どの列で昇順/降順に並べるか）を表す型
 import org.springframework.data.domain.Sort;
-// 一覧取得時の既定ページサイズを指定するアノテーション
-import org.springframework.data.web.PageableDefault;
 // HTTP レスポンス全体を表すクラス
 import org.springframework.http.ResponseEntity;
 // DELETE マッピング用アノテーション
@@ -82,8 +80,11 @@ public class ExpenseController {
             @RequestParam(value = "month", required = false) String month,
             // カテゴリ ID での絞り込み（任意）
             @RequestParam(value = "categoryId", required = false) Long categoryId,
-            // ページ指定（page / size。size 未指定時は既定 20。上限は application.yml で制限）
-            @PageableDefault(size = 20) Pageable pageable) {
+            // ページ指定（page / size）。size 未指定時の既定値（20）・上限（100）はともに
+            // application.yml の spring.data.web.pageable が唯一の参照元（§6 一元管理。
+            // 以前は @PageableDefault(size = 20) で既定値を重複定義しており、設定変更時に
+            // YAML とアノテーションの値がズレる余地があった）
+            Pageable pageable) {
         // クライアント由来の sort クエリパラメータは無視し、並び順はリポジトリの JPQL 側 ORDER BY
         // （spentOn 降順→id 降順）に固定する。未検証の並び順が下位クエリへ届くのを Web 境界で防ぐ（§9）。
         Pageable sanitized = PageableSanitizer.withFixedSort(pageable, EXPENSE_LIST_SORT);
