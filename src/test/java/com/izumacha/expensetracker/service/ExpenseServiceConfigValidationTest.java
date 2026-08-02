@@ -20,7 +20,7 @@ import static org.mockito.Mockito.mock;
 
 /**
  * ExpenseService のコンストラクタが設定値（summary のカテゴリ内訳上限
- * {@code spring.data.web.pageable.max-page-size}）を検証し、
+ * {@code app.summary.max-categories}）を検証し、
  * 不正値では起動を失敗させる（fail-closed）ことを確認するユニットテスト。
  *
  * <p>【何を守るテストか】検証が無いと、0 以下の設定でもアプリは起動に成功する一方、
@@ -57,7 +57,7 @@ class ExpenseServiceConfigValidationTest {
                 // 例外の型が IllegalStateException であることを検証する
                 .isInstanceOf(IllegalStateException.class)
                 // メッセージに対象プロパティ名が含まれ、管理者が直すべき設定を特定できることを検証する
-                .hasMessageContaining("spring.data.web.pageable.max-page-size");
+                .hasMessageContaining("app.summary.max-categories");
     }
 
     // 上限が負のときも起動時例外で失敗することを検証する（境界値の負数側）
@@ -68,7 +68,30 @@ class ExpenseServiceConfigValidationTest {
                 // 例外の型が IllegalStateException であることを検証する
                 .isInstanceOf(IllegalStateException.class)
                 // メッセージに対象プロパティ名が含まれることを検証する
-                .hasMessageContaining("spring.data.web.pageable.max-page-size");
+                .hasMessageContaining("app.summary.max-categories");
+    }
+
+    // 上限が int の最大値なら起動時例外で失敗することを検証する（境界値の上側）。
+    // summary() は打ち切り判定のため「上限+1」件を取得する。Integer.MAX_VALUE のままだと
+    // この加算がオーバーフローして負数になり、PageRequest.of(0, 負数) が毎リクエスト
+    // IllegalArgumentException を投げて 400 になる（設定ミスが実行時まで露見しない fail-open）。
+    @Test
+    void 上限がintの最大値なら起動時例外() {
+        // 上限 Integer.MAX_VALUE での生成が IllegalStateException を投げることを検証する
+        assertThatThrownBy(() -> createService(Integer.MAX_VALUE))
+                // 例外の型が IllegalStateException であることを検証する
+                .isInstanceOf(IllegalStateException.class)
+                // メッセージに対象プロパティ名が含まれることを検証する
+                .hasMessageContaining("app.summary.max-categories");
+    }
+
+    // 上限が int の最大値の 1 つ手前なら生成できることを検証する（境界値のすぐ内側）
+    @Test
+    void 上限がintの最大値の1つ手前なら生成できる() {
+        // 「上限+1」がオーバーフローしない最大値での生成が例外を投げないことを検証する
+        assertThatCode(() -> createService(Integer.MAX_VALUE - 1))
+                // どの例外も発生しないことを検証する
+                .doesNotThrowAnyException();
     }
 
     // 正常な設定値（1 以上）では例外なく生成できることを検証する

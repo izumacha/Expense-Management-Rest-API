@@ -63,6 +63,16 @@ import lombok.Setter;
 @NoArgsConstructor
 public class Expense {
 
+    // 説明（description）に許可する最大文字数（コードポイント数）。
+    // 【なぜ定数にするか】この上限は「DB 列長（@Column(length)）」と「DTO の入力検証
+    // （CreateExpenseRequest / UpdateExpenseRequest の @MaxCodePoints）」の両方で使う。
+    // 裸の数値を各所に書くと、片方だけ変更したときに「検証は通るが DB には入らない」状態になり、
+    // 保存時の DataIntegrityViolationException が RaceGuard で「参照先カテゴリが消えたレース」と
+    // 誤認され、実際には長すぎる説明が原因なのに 404「カテゴリが見つかりません」を返してしまう。
+    // 単一の参照元にまとめて両者を必ず同じ値に保つ（共通規約 §6 一元管理／マジックナンバー回避）。
+    // Category.NAME_MAX_LENGTH と同じ方針に揃えている。
+    public static final int DESCRIPTION_MAX_LENGTH = 255;
+
     // 主キー（自動採番）
     @Id
     // DB の ID 列で自動採番する
@@ -79,8 +89,8 @@ public class Expense {
     @JoinColumn(name = "category_id", nullable = false)
     private Category category;
 
-    // 説明（任意・最大255文字）
-    @Column(length = 255)
+    // 説明（任意・上限は DESCRIPTION_MAX_LENGTH 文字。DTO の入力検証と同じ定数を参照する）
+    @Column(length = DESCRIPTION_MAX_LENGTH)
     private String description;
 
     // 支出日（必須）

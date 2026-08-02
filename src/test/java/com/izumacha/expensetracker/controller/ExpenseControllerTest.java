@@ -267,15 +267,18 @@ class ExpenseControllerTest {
     void 月次集計_200で返る() throws Exception {
         // サービスが集計結果を返すようモックする
         when(expenseService.summary("2026-06"))
-                // 総合計 2000 円・内訳なしの集計を返す
-                .thenReturn(new SummaryResponse("2026-06", new BigDecimal("2000"), List.of()));
+                // 総合計 2000 円・内訳なし・打ち切りなしの集計を返す
+                .thenReturn(new SummaryResponse("2026-06", new BigDecimal("2000"), List.of(), false));
 
         // month を付けて集計エンドポイントへ GET する
         mockMvc.perform(get("/api/expenses/summary").param("month", "2026-06"))
                 // ステータスが 200 であることを検証する
                 .andExpect(status().isOk())
                 // 本体の total が 2000 であることを検証する
-                .andExpect(jsonPath("$.total").value(2000));
+                .andExpect(jsonPath("$.total").value(2000))
+                // 打ち切りフラグが JSON に含まれ、打ち切りなし（false）で返ることを検証する
+                // （フィールドを落とすとクライアントが「内訳の欠落」を検知できなくなるため契約として固定する）
+                .andExpect(jsonPath("$.byCategoryTruncated").value(false));
     }
 
     // GET /summary: month 欠落は 400 になり {status,message} 形式が返ることを検証する

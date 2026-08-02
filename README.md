@@ -143,11 +143,13 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
   "byCategory": [
     { "categoryId": 1, "categoryName": "食費",   "total": 31200.00 },
     { "categoryId": 2, "categoryName": "交通費", "total": 21140.00 }
-  ]
+  ],
+  "byCategoryTruncated": false
 }
 ```
 
-> `byCategory` は合計金額の大きい順（同額ならカテゴリ ID の小さい順）で、**最大 100 カテゴリまで**返します（超えた分は打ち切られます）。`total` は打ち切りに関係なく、その月の**すべての支出**の合計です。
+> `byCategory` は合計金額の大きい順（同額ならカテゴリ ID の小さい順）で、**既定で最大 100 カテゴリまで**返します（超えた分は打ち切られます）。上限は `APP_SUMMARY_MAX_CATEGORIES` で変更できます。
+> `total` は打ち切りに関係なく、その月の**すべての支出**の合計です。打ち切りが起きた場合は `byCategoryTruncated` が `true` になり、`byCategory` の足し上げが `total` より小さくなることを判別できます。
 
 ---
 
@@ -460,11 +462,13 @@ It returns that month's **total** and a **per-category breakdown**.
   "byCategory": [
     { "categoryId": 1, "categoryName": "Food",      "total": 31200.00 },
     { "categoryId": 2, "categoryName": "Transport", "total": 21140.00 }
-  ]
+  ],
+  "byCategoryTruncated": false
 }
 ```
 
-> `byCategory` is sorted by amount in descending order (ties broken by ascending category ID) and returns **at most 100 categories** (anything beyond that is truncated). `total` always covers **every expense** in the month, regardless of truncation.
+> `byCategory` is sorted by amount in descending order (ties broken by ascending category ID) and returns **at most 100 categories by default** (anything beyond that is truncated); change the cap with `APP_SUMMARY_MAX_CATEGORIES`.
+> `total` always covers **every expense** in the month, regardless of truncation. When truncation happens, `byCategoryTruncated` is `true`, so you can tell that the `byCategory` entries add up to less than `total`.
 
 ---
 

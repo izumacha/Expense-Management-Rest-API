@@ -692,12 +692,14 @@ class ExpenseServiceTest {
         assertThat(response.byCategory().get(0).total().scale()).isEqualTo(2);
         assertThat(response.byCategory().get(1).total()).isEqualByComparingTo("500");
         assertThat(response.byCategory().get(1).total().scale()).isEqualTo(2);
+        // 上限（100件）に届いていないので打ち切りは発生していないことを検証する
+        assertThat(response.byCategoryTruncated()).isFalse();
     }
 
-    // summary: カテゴリ別内訳は上限件数（100件・先頭ページ）で打ち切られるページ指定で問い合わせられ、
+    // summary: カテゴリ別内訳は「上限件数+1」を先頭ページで問い合わせ（打ち切り判定用に1件多く取る）、
     // 総合計は打ち切りの影響を受けない月全体の SUM を使うことを検証する（無制限取得の防止・共通規約 §8/§9）
     @Test
-    void summary_内訳は上限100件で問い合わせ総合計は月全体のSUMを使う() {
+    void summary_内訳は上限プラス1件で問い合わせ総合計は月全体のSUMを使う() {
         // 上限まで打ち切られた内訳を模すため、任意の1件だけを返すようモックする
         when(expenseRepository.summarizeByCategory(any(), any(), any()))
                 // 内訳としては食費 1500 円の行だけが返る（打ち切り後の姿を模す）
@@ -717,8 +719,67 @@ class ExpenseServiceTest {
         verify(expenseRepository).summarizeByCategory(any(), any(), pageableCaptor.capture());
         // 先頭ページ（0 ページ目）が指定されていることを検証する
         assertThat(pageableCaptor.getValue().getPageNumber()).isEqualTo(0);
-        // 件数上限が一覧 API と同じ 100 件であることを検証する
-        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(100);
+        // 打ち切り判定のため、設定上限(100)より 1 件だけ多く取得していることを検証する
+        // （ちょうど上限件数だけ取ると「上限と同数」と「上限超過」を区別できなくなる）
+        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(101);
+    }
+
+    // summary: カテゴリ数が上限を超えたときは内訳を上限件数へ切り詰め、打ち切りフラグを true にすることを検証する。
+    // 【何を守るテストか】打ち切りを黙って行うと「byCategory の足し上げ < total」の差分をクライアントが
+    // 集計バグと誤認する。上限超過を検知して明示的に伝える契約を固定する。
+    @Test
+    void summary_カテゴリ数が上限超過なら内訳を切り詰めて打ち切りフラグを立てる() {
+        // 上限 2 件のサービスへ差し替える（上限超過の状況を少ないデータで再現するため）
+        expenseService = new ExpenseService(expenseRepository, categoryRepository, entityManager, 2);
+        // 上限 2 に対し 3 件（＝上限+1 件）返るようモックする（DB が「まだ続きがある」と示した状態）
+        when(expenseRepository.summarizeByCategory(any(), any(), any()))
+                .thenReturn(List.of(
+                        // 1 件目（合計降順の先頭）
+                        new CategorySummary(1L, "食費", new BigDecimal("3000")),
+                        // 2 件目
+                        new CategorySummary(2L, "交通費", new BigDecimal("2000")),
+                        // 3 件目（判定用に多く取った分。レスポンスには載らない想定）
+                        new CategorySummary(3L, "娯楽費", new BigDecimal("1000"))));
+        // 月全体の合計は 3 カテゴリ分の 6000 を返すようモックする
+        when(expenseRepository.sumAmount(any(), any())).thenReturn(new BigDecimal("6000.00"));
+
+        // 2026-06 の集計を取得する
+        SummaryResponse response = expenseService.summary("2026-06");
+
+        // 内訳が上限件数（2 件）へ切り詰められていることを検証する（判定用の 3 件目は返さない）
+        assertThat(response.byCategory()).hasSize(2);
+        // 切り詰めで残るのは合計降順の上位（食費・交通費）であることを検証する
+        assertThat(response.byCategory().get(0).categoryName()).isEqualTo("食費");
+        assertThat(response.byCategory().get(1).categoryName()).isEqualTo("交通費");
+        // 打ち切りが起きたことがフラグで伝わることを検証する
+        assertThat(response.byCategoryTruncated()).isTrue();
+        // 総合計は打ち切りに関係なく月全体の SUM（6000）のままであることを検証する
+        assertThat(response.total()).isEqualByComparingTo("6000");
+    }
+
+    // summary: カテゴリ数がちょうど上限と同数のときは打ち切りが起きていないと判定することを検証する（境界値・§11）。
+    // 「上限件数ちょうど返ってきた」を打ち切りと誤判定すると、欠落が無いのに欠落ありと伝えてしまう。
+    @Test
+    void summary_カテゴリ数が上限ちょうどなら打ち切りフラグは立たない() {
+        // 上限 2 件のサービスへ差し替える
+        expenseService = new ExpenseService(expenseRepository, categoryRepository, entityManager, 2);
+        // 上限 2 に対しちょうど 2 件返るようモックする（＝上限+1 件目が存在しない状態）
+        when(expenseRepository.summarizeByCategory(any(), any(), any()))
+                .thenReturn(List.of(
+                        // 1 件目
+                        new CategorySummary(1L, "食費", new BigDecimal("3000")),
+                        // 2 件目（これで全カテゴリ。続きは無い）
+                        new CategorySummary(2L, "交通費", new BigDecimal("2000"))));
+        // 月全体の合計は内訳の足し上げと一致する 5000 を返すようモックする
+        when(expenseRepository.sumAmount(any(), any())).thenReturn(new BigDecimal("5000.00"));
+
+        // 2026-06 の集計を取得する
+        SummaryResponse response = expenseService.summary("2026-06");
+
+        // 内訳が 2 件そのまま返ることを検証する
+        assertThat(response.byCategory()).hasSize(2);
+        // 打ち切りは発生していないと判定されることを検証する
+        assertThat(response.byCategoryTruncated()).isFalse();
     }
 
     // summary: 支出が1件も無い月でも、総合計を小数2桁("0.00")で返し JSON の桁数を一定に保つことを検証する。
@@ -740,6 +801,8 @@ class ExpenseServiceTest {
         assertThat(response.total().scale()).isEqualTo(2);
         // カテゴリ別が空であることを検証する
         assertThat(response.byCategory()).isEmpty();
+        // 内訳が空なので打ち切りも発生していないことを検証する
+        assertThat(response.byCategoryTruncated()).isFalse();
     }
 
     // summary: 不正な月形式は InvalidRequestException（400 相当）になることを検証する

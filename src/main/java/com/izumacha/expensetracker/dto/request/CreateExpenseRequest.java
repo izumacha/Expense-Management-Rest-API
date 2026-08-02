@@ -13,6 +13,8 @@ import jakarta.validation.constraints.PastOrPresent;
 import java.math.BigDecimal;
 // 日付型
 import java.time.LocalDate;
+// 説明の最大文字数の唯一の参照元（DB 列長と入力検証を同じ定数で揃えるため）
+import com.izumacha.expensetracker.domain.Expense;
 // 文字数をコードポイント単位で制限するバリデーション（DB varchar 列の基準に合わせる）
 import com.izumacha.expensetracker.validation.MaxCodePoints;
 // 制御文字（NUL 等）を含まないことを検証するバリデーション（PostgreSQL は NUL を text 列に
@@ -34,8 +36,10 @@ public record CreateExpenseRequest(
         @NotNull(message = "must not be null")
         Long categoryId,
 
-        // 説明（任意・最大255文字・制御文字禁止。サロゲートペア文字でも DB の varchar(255) と基準を合わせるためコードポイント単位で検証する）
-        @MaxCodePoints(max = 255, message = "must be at most 255 characters")
+        // 説明（任意・上限は Expense.DESCRIPTION_MAX_LENGTH 文字・制御文字禁止。
+        // サロゲートペア文字でも DB の varchar 列と基準を合わせるためコードポイント単位で検証する。
+        // 上限値は DB 列長と同じ定数を参照し、片方だけ変えて不整合が起きるのを防ぐ）
+        @MaxCodePoints(max = Expense.DESCRIPTION_MAX_LENGTH, message = "must be at most {max} characters")
         // NUL 等の制御文字を禁止する（タブ・改行・復帰は許容。詳細は NoControlCharacters の Javadoc を参照）
         @NoControlCharacters(message = "must not contain control characters")
         String description,

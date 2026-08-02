@@ -82,9 +82,11 @@ public class ExpenseService {
     // 月次集計（summary）の byCategory が返すカテゴリ別内訳の最大件数。
     // カテゴリ数は API 経由で無制限に増やせるため、上限が無いと集計応答が際限なく肥大化し
     // リソース枯渇を招く（共通規約 §8「一覧取得は必ず上限を持たせる」§9 DoS 防止）。
-    // 一覧 API の上限（application.yml の spring.data.web.pageable.max-page-size）と同じ値を
-    // @Value で直接注入することで二重管理を無くし、設定変更時の値ズレ（片方だけ変更されて
-    // 一覧とsummaryで上限が食い違う不具合）を構造的に防ぐ。
+    // 【なぜ専用の設定キー（app.summary.max-categories）なのか】以前は一覧 API のページ上限
+    // （spring.data.web.pageable.max-page-size）を流用していたが、この 2 つは意味の異なる関心事
+    // （「1 ページに何件返すか」と「集計の内訳を何カテゴリまで返すか」）である。流用したままだと
+    // 一覧のページサイズを絞る運用変更をしただけで月次集計の粒度まで黙って狭まってしまう。
+    // §6 の一元管理は「1 つの関心事につき 1 つの参照元」を意味するため、関心事ごとにキーを分ける。
     private final int summaryMaxCategories;
 
     // コンストラクタインジェクションで依存を受け取る
@@ -92,11 +94,11 @@ public class ExpenseService {
             ExpenseRepository expenseRepository,
             CategoryRepository categoryRepository,
             EntityManager entityManager,
-            // application.yml の一覧ページング上限値をそのまま注入する（未設定時は既定の100件）
-            @Value("${spring.data.web.pageable.max-page-size:100}") int summaryMaxCategories) {
+            // application.yml の集計内訳の上限値を注入する（未設定時は既定の100件）
+            @Value("${app.summary.max-categories:100}") int summaryMaxCategories) {
         // 【設定値由来の値を必ず検証する（§9 入力は信用しない・fail-closed）】
         // 検証を怠ると、0 以下の設定でもアプリは起動に成功する一方、summary() の
-        // PageRequest.of(0, summaryMaxCategories) が毎回 IllegalArgumentException を投げ、
+        // PageRequest.of(0, ...) が毎回 IllegalArgumentException を投げ、
         // サーバ側の設定ミスなのに 400（クライアント起因の不正リクエスト）として返ってしまう。
         // 実行時に静かに壊れるより、RateLimitFilter / RequestBodySizeLimitFilter の設定値検証と
         // 同じく起動そのものを失敗させる fail-closed に倒す。
@@ -104,7 +106,18 @@ public class ExpenseService {
         if (summaryMaxCategories <= 0) {
             // 設定ミスの内容と直し方が分かる日本語メッセージで起動時例外（アプリは開始しない）を投げる
             throw new IllegalStateException(
-                    "spring.data.web.pageable.max-page-size は 1 以上を指定してください。現在値: "
+                    "app.summary.max-categories（APP_SUMMARY_MAX_CATEGORIES）は 1 以上を指定してください。現在値: "
+                            + summaryMaxCategories);
+        }
+        // 上限が int の最大値だと、打ち切り判定のために summary() で計算する「上限+1」が
+        // オーバーフローして負数になり、PageRequest.of(0, 負数) が毎回 IllegalArgumentException を
+        // 投げる（＝設定ミスなのに毎リクエスト 400 になる fail-open）。0 以下の検証と同じ理由で、
+        // 起動時に弾いて実行時に静かに壊れないようにする。
+        if (summaryMaxCategories == Integer.MAX_VALUE) {
+            // 上限値の実用的な最大（Integer.MAX_VALUE - 1）を示して設定を直せるようにする
+            throw new IllegalStateException(
+                    "app.summary.max-categories（APP_SUMMARY_MAX_CATEGORIES）は "
+                            + (Integer.MAX_VALUE - 1) + " 以下を指定してください。現在値: "
                             + summaryMaxCategories);
         }
         // 支出リポジトリをフィールドに設定する
@@ -113,7 +126,7 @@ public class ExpenseService {
         this.categoryRepository = categoryRepository;
         // 受け取ったエンティティマネージャをフィールドに設定する
         this.entityManager = entityManager;
-        // 注入されたページング上限値を summary の打ち切り件数としても使う
+        // 注入された集計内訳の上限件数をフィールドに設定する
         this.summaryMaxCategories = summaryMaxCategories;
     }
 
@@ -204,16 +217,25 @@ public class ExpenseService {
         // 期間終了（翌月初・含まない）を求める
         LocalDate end = target.plusMonths(1).atDay(1);
         // GROUP BY でカテゴリ別合計を取得する。件数無制限の取得を避けるため（共通規約 §8/§9）、
-        // 合計降順→カテゴリID昇順の上位 summaryMaxCategories 件だけに打ち切る
-        List<CategorySummary> byCategory = expenseRepository.summarizeByCategory(
+        // 合計降順→カテゴリID昇順の上位 summaryMaxCategories 件だけに打ち切る。
+        // 【なぜ上限+1 件取るのか】「ちょうど上限件数返ってきた」だけでは、たまたま
+        // カテゴリ数が上限と同数だったのか、上限を超えて打ち切られたのかを区別できない。
+        // 1 件だけ多く取得して「余分な 1 件があったか」を見れば、打ち切りの有無を
+        // 追加クエリなしで正確に判定できる（COUNT クエリを 1 本増やさずに済む）。
+        List<CategorySummary> fetched = expenseRepository.summarizeByCategory(
                 // 期間（月初〜翌月初）を渡す
                 start, end,
-                // 先頭ページ＋上限件数のページ指定で LIMIT を掛ける（並び順は JPQL 側で固定済み）
-                PageRequest.of(0, summaryMaxCategories))
+                // 先頭ページ＋（上限+1）件のページ指定で LIMIT を掛ける（並び順は JPQL 側で固定済み）
+                PageRequest.of(0, summaryMaxCategories + 1));
+        // 取得件数が上限を超えていれば「打ち切りが発生した」と判定する
+        boolean byCategoryTruncated = fetched.size() > summaryMaxCategories;
+        // 判定用に 1 件多く取っているので、クライアントへ返すのは上限件数までに切り詰める
+        List<CategorySummary> byCategory = fetched.stream()
+                // 上限件数を超える分（判定用の余分な 1 件）を捨てる
+                .limit(summaryMaxCategories)
                 // JPQL の SUM(e.amount) は DB 側の結果スケールをそのまま返すため、保存時に
                 // 揃えている scale=2 と食い違うことがある。total と同じ正規化をここでも
                 // 適用し、byCategory[].total の小数桁を JSON レスポンス全体で一貫させる
-                .stream()
                 .map(cs -> new CategorySummary(
                         cs.categoryId(), cs.categoryName(),
                         cs.total().setScale(MONEY_SCALE, RoundingMode.HALF_UP)))
@@ -228,8 +250,9 @@ public class ExpenseService {
         BigDecimal total = (monthTotal == null ? BigDecimal.ZERO : monthTotal)
                 // 金額の桁数（小数2桁）へ揃える
                 .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        // 集計結果を DTO に詰めて返す
-        return new SummaryResponse(month, total, byCategory);
+        // 集計結果を DTO に詰めて返す（打ち切りの有無も併せて返し、
+        // 「byCategory の足し上げ ≠ total」がバグではなく上限による打ち切りだとクライアントが判別できるようにする）
+        return new SummaryResponse(month, total, byCategory, byCategoryTruncated);
     }
 
     // 作成・更新の両リクエストで共通の内容を支出エンティティへ反映する

@@ -104,3 +104,11 @@ app:
     # 許可する本文サイズの上限（バイト）。カテゴリ名(50文字)・説明(255文字)等の最大ペイロードに
     # 十分な余裕を持たせつつ、他の巨大ボディ対策（max-swallow-size 等）と同じ桁数に揃える。
     max-body-size-bytes: ${APP_MAX_BODY_SIZE_BYTES:1048576}
+  # 月次集計（GET /api/expenses/summary）に関する設定
+  summary:
+    # byCategory（カテゴリ別内訳）が返す最大カテゴリ数。カテゴリは API 経由で無制限に
+    # 増やせるため、上限が無いと集計応答が際限なく肥大化する（§8 一覧の上限／§9 DoS 防止）。
+    # 上限を超えた分は打ち切られ、レスポンスの byCategoryTruncated が true になる。
+    # 注: 一覧 API のページ上限（spring.data.web.pageable.max-page-size）とは別の関心事なので
+    # 意図的にキーを分けている。一覧のページサイズを絞っても集計の粒度は変わらない。
+    max-categories: ${APP_SUMMARY_MAX_CATEGORIES:100}
