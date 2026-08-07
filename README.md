@@ -270,7 +270,7 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/expenses?month
 | 404 | 対象が見つからない | 存在しないカテゴリ番号や支出番号を指定した |
 | 409 | 重複している・競合している | すでにある名前のカテゴリを作ろうとした／別の操作が同じデータを先に変更していた（少し待ってからやり直す） |
 | 413 | リクエスト本文が大きすぎる | JSON ボディが上限（既定 1MB）を超えた |
-| 429 | アクセスが多すぎる | 短時間に大量のリクエストを送った（レート制限） |
+| 429 | アクセスが多すぎる | 短時間に大量のリクエストを送った（レート制限）。トークン発行（`POST /api/auth/token`）は総当たり対策のため他より早く上限に達する（既定で 10 回/分・送信元 IP ごと） |
 
 ---
 
@@ -630,7 +630,7 @@ What the `status` number means:
 | 404 | Target not found | A category/expense number that doesn't exist |
 | 409 | Conflict (duplicate / concurrent update) | Trying to create a category whose name already exists, or another operation modified the same data first (retry after a moment) |
 | 413 | Request body too large | The JSON body exceeded the limit (1MB by default) |
-| 429 | Too many requests | Too many requests in a short time (rate limit) |
+| 429 | Too many requests | Too many requests in a short time (rate limit). Token issuance (`POST /api/auth/token`) hits the limit sooner than other endpoints as brute-force protection (10 requests/min per source IP by default) |
 
 ---
 
