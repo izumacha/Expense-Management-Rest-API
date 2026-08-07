@@ -27,10 +27,12 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.TestPropertySource;
 // HTTP リクエストを擬似実行するクライアント
 import org.springframework.test.web.servlet.MockMvc;
-// @WebMvcTest のデフォルト認証要求を無効化し、実際の SecurityConfig（permitAll）を読み込むために使う
+// 実際の SecurityConfig（JWT 認証必須）をスライスへ読み込むために使う
 import org.springframework.context.annotation.Import;
-// セキュリティ設定クラス（anyRequest().permitAll() を定義）
+// セキュリティ設定クラス（トークン発行以外を認証必須にする）
 import com.izumacha.expensetracker.config.SecurityConfig;
+// JWT のデコーダ／エンコーダ Bean を提供する設定クラス（SecurityConfig が JwtDecoder を必要とする）
+import com.izumacha.expensetracker.config.JwtConfig;
 
 // any() マッチャを取り込む（Mockito）
 import static org.mockito.ArgumentMatchers.any;
@@ -41,6 +43,8 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 // GET リクエストを組み立てる get を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+// 認証済みの JWT をテストリクエストへ載せる jwt ポストプロセッサを取り込む（spring-security-test）
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 // レスポンスのステータスを検証する status を取り込む
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -59,9 +63,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 // テスト対象のコントローラを CategoryController に限定する（スライステスト）
 @WebMvcTest(CategoryController.class)
-// @WebMvcTest はデフォルトで Spring Security の認証要求を有効化するが、
-// 実際のアプリは anyRequest().permitAll() なので SecurityConfig を明示インポートして一致させる
-@Import(SecurityConfig.class)
+// 実際のアプリと同じセキュリティ設定（JWT 認証必須）で検証するため、SecurityConfig と
+// その依存（JwtDecoder を提供する JwtConfig）を明示インポートする。テスト用シークレットは
+// src/test/resources/application.properties の security.jwt.secret が供給する。
+// 各リクエストには jwt() で認証済みトークンを載せ、認証の 401 でなくレート制限の挙動を観測する
+@Import({SecurityConfig.class, JwtConfig.class})
 // 単位時間あたりの上限を 2 に、ウィンドウを十分長くしてテスト中に切り替わらないようにする。
 // trust-x-forwarded-for=true にして XFF ヘッダを信頼する経路を有効化する
 @TestPropertySource(properties = {
@@ -112,21 +118,21 @@ class RateLimitFilterXffTest {
     @Test
     void XFF末尾IPでレート制限がかかる() throws Exception {
         // X-Forwarded-For: 1.2.3.4 を 1 回目（上限内）→ 200 を検証する
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // クライアントから直接来た単一 IP を XFF に設定する
                         .header("X-Forwarded-For", "1.2.3.4"))
                 // 1 回目は制限内なので 200 になることを検証する
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: 1.2.3.4 を 2 回目（上限内）→ 200 を検証する
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 同じ IP（1.2.3.4）を再度送る
                         .header("X-Forwarded-For", "1.2.3.4"))
                 // 2 回目も制限内なので 200 になることを検証する
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: 1.2.3.4 を 3 回目（上限超過）→ 429 を検証する
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 同じ IP（1.2.3.4）を 3 回目送る（上限 2 を超える）
                         .header("X-Forwarded-For", "1.2.3.4"))
                 // 3 回目は上限超過なので 429 になることを検証する
@@ -144,21 +150,21 @@ class RateLimitFilterXffTest {
     @Test
     void XFF複数IPの末尾でレート制限がかかる() throws Exception {
         // X-Forwarded-For: spoofed-ip, 5.6.7.8 → 末尾 5.6.7.8 がキー、1 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 先頭に攻撃者が挿入した偽 IP、末尾がプロキシ記録の実 IP
                         .header("X-Forwarded-For", "spoofed-ip, 5.6.7.8"))
                 // 1 回目は制限内なので 200 になることを検証する
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: other-spoofed, 5.6.7.8 → 先頭を変えても末尾 5.6.7.8 は同じ、2 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 先頭の偽 IP を変えても末尾（5.6.7.8）は同じなので同一クライアント扱い
                         .header("X-Forwarded-For", "other-spoofed, 5.6.7.8"))
                 // 2 回目も制限内なので 200 になることを検証する
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: yet-another-spoofed, 5.6.7.8 → 先頭を変えても末尾 5.6.7.8 は同じ、3 回目は 429
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 先頭の偽 IP をさらに変えても末尾（5.6.7.8）が同じなので上限超過
                         .header("X-Forwarded-For", "yet-another-spoofed, 5.6.7.8"))
                 // 3 回目は上限超過なので 429 になることを検証する
@@ -176,21 +182,21 @@ class RateLimitFilterXffTest {
     @Test
     void XFF不正形式はリモートアドレスにフォールバックする() throws Exception {
         // X-Forwarded-For: invalid-hostname → IP 形式でないため 127.0.0.1 がキーに、1 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // IP 形式でないホスト名を XFF に設定する（不正な形式）
                         .header("X-Forwarded-For", "invalid-hostname"))
                 // 1 回目は制限内なので 200 になることを検証する
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: invalid-hostname → 引き続き 127.0.0.1 がキーに、2 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 同じ無効なホスト名を再度送る（フォールバック先は 127.0.0.1 で同じ）
                         .header("X-Forwarded-For", "invalid-hostname"))
                 // 2 回目も制限内なので 200 になることを検証する
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: invalid-hostname → 引き続き 127.0.0.1 がキーに、3 回目は 429
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 3 回目も無効なホスト名。フォールバック先 127.0.0.1 の上限を超える
                         .header("X-Forwarded-For", "invalid-hostname"))
                 // 3 回目は上限超過なので 429 になることを検証する
@@ -210,7 +216,7 @@ class RateLimitFilterXffTest {
     @Test
     void XFF複数ヘッダ行では最後の行でレート制限がかかる() throws Exception {
         // 1 行目=攻撃者偽装（203.0.113.1）、2 行目=プロキシ付与（198.51.100.7）→ 最後の行がキー、1 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 攻撃者がリクエストに最初から含めた偽の XFF 行（正しい IP 形式で偽装している点が重要）
                         .header("X-Forwarded-For", "203.0.113.1")
                         // 追記型プロキシが後ろに追加した実接続元の XFF 行
@@ -219,7 +225,7 @@ class RateLimitFilterXffTest {
                 .andExpect(status().isOk());
 
         // 1 行目の偽装 IP を変えても、最後の行（198.51.100.7）が同じなら同一クライアント扱い、2 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 攻撃者が 1 行目の偽装 IP を変える（キー偽装の試み）
                         .header("X-Forwarded-For", "203.0.113.2")
                         // プロキシが付与する実接続元の行は変わらない
@@ -228,7 +234,7 @@ class RateLimitFilterXffTest {
                 .andExpect(status().isOk());
 
         // 1 行目をさらに変えても最後の行が同じなので上限超過、3 回目は 429
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 攻撃者が 1 行目の偽装 IP をさらに変える
                         .header("X-Forwarded-For", "203.0.113.3")
                         // プロキシが付与する実接続元の行は変わらない
@@ -250,7 +256,7 @@ class RateLimitFilterXffTest {
     @Test
     void XFFがコロン無しの16進文字列なら採用せずリモートアドレスにフォールバックする() throws Exception {
         // XFF: deadbeef → IPv6 形式でないため接続元 IP（10.99.1.1）がキーに、1 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // コロンを含まない 16 進文字のみの値を送る（旧パターンでは IPv6 と誤判定されていた）
                         .header("X-Forwarded-For", "deadbeef")
                         // このリクエスト固有の接続元 IP を設定する
@@ -259,7 +265,7 @@ class RateLimitFilterXffTest {
                 .andExpect(status().isOk());
 
         // 同じ XFF: deadbeef でも接続元 IP が違えば別カウンタ、こちらも 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 同じ 16 進のみの値を送る
                         .header("X-Forwarded-For", "deadbeef")
                         // 別の接続元 IP を設定する（"deadbeef" がキーなら同一カウンタになってしまう）
@@ -268,7 +274,7 @@ class RateLimitFilterXffTest {
                 .andExpect(status().isOk());
 
         // さらに別の接続元 IP でも 200（3 回とも別カウンタ＝ヘッダ値はキーとして採用されていない）
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 同じ 16 進のみの値を送る
                         .header("X-Forwarded-For", "deadbeef")
                         // さらに別の接続元 IP を設定する
@@ -290,7 +296,7 @@ class RateLimitFilterXffTest {
     @Test
     void XFFがカンマのみでもクラッシュせずリモートアドレスにフォールバックする() throws Exception {
         // X-Forwarded-For: "," → 末尾トークンが空文字列のため接続元 IP（10.99.0.1）がキーに、1 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // カンマ 1 つだけのヘッダ値を送る（末尾トークンが空になる境界値）
                         .header("X-Forwarded-For", ",")
                         // このテスト固有の接続元 IP を設定する（他テストとのカウンタ衝突防止）
@@ -299,7 +305,7 @@ class RateLimitFilterXffTest {
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: "," → 引き続き 10.99.0.1 がキーに、2 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 同じカンマのみの値を再度送る（フォールバック先は同じ接続元 IP）
                         .header("X-Forwarded-For", ",")
                         // 同じ接続元 IP を設定する
@@ -308,7 +314,7 @@ class RateLimitFilterXffTest {
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: "," → 引き続き 10.99.0.1 がキーに、3 回目は 429
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 3 回目もカンマのみの値。フォールバック先（10.99.0.1）の上限を超える
                         .header("X-Forwarded-For", ",")
                         // 同じ接続元 IP を設定する
@@ -329,7 +335,7 @@ class RateLimitFilterXffTest {
     @Test
     void XFFがカンマ連続でもクラッシュせずリモートアドレスにフォールバックする() throws Exception {
         // X-Forwarded-For: ",,," → 末尾トークンが空文字列のため接続元 IP（10.99.0.2）がキーに、1 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // カンマだけが連続するヘッダ値を送る（すべてのトークンが空になる境界値）
                         .header("X-Forwarded-For", ",,,")
                         // このテスト固有の接続元 IP を設定する（他テストとのカウンタ衝突防止）
@@ -338,7 +344,7 @@ class RateLimitFilterXffTest {
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: ",,," → 引き続き 10.99.0.2 がキーに、2 回目は 200
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 同じカンマ連続の値を再度送る（フォールバック先は同じ接続元 IP）
                         .header("X-Forwarded-For", ",,,")
                         // 同じ接続元 IP を設定する
@@ -347,7 +353,7 @@ class RateLimitFilterXffTest {
                 .andExpect(status().isOk());
 
         // X-Forwarded-For: ",,," → 引き続き 10.99.0.2 がキーに、3 回目は 429
-        mockMvc.perform(get("/api/categories")
+        mockMvc.perform(get("/api/categories").with(jwt())
                         // 3 回目もカンマ連続の値。フォールバック先（10.99.0.2）の上限を超える
                         .header("X-Forwarded-For", ",,,")
                         // 同じ接続元 IP を設定する

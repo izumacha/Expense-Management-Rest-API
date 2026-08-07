@@ -3,8 +3,10 @@ package com.izumacha.expensetracker.web;
 
 // テスト対象の経路に使うカテゴリコントローラを参照する
 import com.izumacha.expensetracker.controller.CategoryController;
-// セキュリティ設定クラス（anyRequest().permitAll() を定義）を参照する
+// セキュリティ設定クラス（トークン発行以外を認証必須にする）を参照する
 import com.izumacha.expensetracker.config.SecurityConfig;
+// JWT のデコーダ／エンコーダ Bean を提供する設定クラス（SecurityConfig が JwtDecoder を必要とする）
+import com.izumacha.expensetracker.config.JwtConfig;
 // カテゴリ作成リクエスト DTO を参照する
 import com.izumacha.expensetracker.dto.request.CreateCategoryRequest;
 // カテゴリ返却 DTO を参照する
@@ -38,6 +40,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 // POST リクエストを組み立てる post を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+// 認証済みの JWT をテストリクエストへ載せる jwt ポストプロセッサを取り込む（spring-security-test）
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 // レスポンスのステータスを検証する status を取り込む
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 // レスポンス本体を JSONPath で検証する jsonPath を取り込む
@@ -48,9 +52,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // 境目として使えるよう、カテゴリ作成の通常ペイロード（数十バイト）より十分大きく、
 // 意図的に肥大化させたペイロード（数百バイト超）より小さい値に設定する。
 @WebMvcTest(CategoryController.class)
-// @WebMvcTest はデフォルトで Spring Security の認証要求を有効化するが、
-// 実際のアプリは anyRequest().permitAll() なので SecurityConfig を明示インポートして一致させる
-@Import(SecurityConfig.class)
+// 実際のアプリと同じセキュリティ設定（JWT 認証必須）で検証するため、SecurityConfig と
+// その依存（JwtDecoder を提供する JwtConfig）を明示インポートする。テスト用シークレットは
+// src/test/resources/application.properties の security.jwt.secret が供給する
+@Import({SecurityConfig.class, JwtConfig.class})
 @TestPropertySource(properties = {"app.request.max-body-size-bytes=200"})
 class RequestBodySizeLimitFilterTest {
 
@@ -65,7 +70,9 @@ class RequestBodySizeLimitFilterTest {
     // JSON 本文を組み立てるためのマッパー
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Content-Length が上限（200バイト）を超えるリクエストは、ボディを読む前に 413 で拒否されることを検証する
+    // Content-Length が上限（200バイト）を超えるリクエストは、ボディを読む前に 413 で拒否されることを検証する。
+    // 本文サイズ上限フィルタは認証（Spring Security）より先に実行されるため、あえてトークンを
+    // 載せずに送り、未認証でも 401 より先に 413 で弾かれる（＝フィルタが認証より手前）ことも同時に確認する
     @Test
     void 宣言サイズが上限超過なら413() throws Exception {
         // 上限を大きく超える（200文字超の）カテゴリ名を持つ JSON ボディを組み立てる
@@ -92,7 +99,10 @@ class RequestBodySizeLimitFilterTest {
                 // 作成結果を返す
                 .thenReturn(new CategoryResponse(1L, "食費"));
         // 上限を超えない通常サイズのカテゴリ作成リクエストを送信する
+        // （コントローラまで到達する経路のため、jwt() で認証済みトークンを載せて 401 を避ける）
         mockMvc.perform(post("/api/categories")
+                        // 認証済みの JWT を載せる
+                        .with(jwt())
                         // JSON として送る
                         .contentType(MediaType.APPLICATION_JSON)
                         // 通常サイズのボディを設定する

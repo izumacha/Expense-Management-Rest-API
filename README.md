@@ -59,18 +59,25 @@ Docker を使わず手元で直接動かしたい場合は、別途 **Java 21** 
 
 ### 0. 環境変数を用意する
 
-このアプリは **DB パスワード** を環境変数で受け取ります（未設定だと安全側に倒して起動しません）。
+このアプリは **DB パスワード** と **認証（JWT）関連の秘密情報** を環境変数で受け取ります（未設定だと安全側に倒して起動しません）。
 同梱の `.env.example` をコピーして `.env` を作り、値を設定してください（`.env` はコミットしないこと）。
 
 ```bash
 cp .env.example .env
-# .env を開き、SPRING_DATASOURCE_PASSWORD に好きな値を設定する
+# .env を開き、SPRING_DATASOURCE_PASSWORD などの必須値を設定する
 ```
 
 | 変数 | 必須 | 説明 |
 |------|------|------|
 | `SPRING_DATASOURCE_PASSWORD` | 必須 | データベースのパスワード |
 | `SPRING_DATASOURCE_USERNAME` | 任意 | DB ユーザー名（未設定なら `expensetracker`） |
+| `JWT_SECRET` | 必須 | アクセストークン（JWT）の署名に使う共有シークレット。**32 文字（バイト）以上**。未設定・短すぎる場合は起動しない |
+| `API_USER_NAME` | 必須 | トークン発行時に照合する API ユーザーのユーザー名 |
+| `API_USER_PASSWORD_HASH` | 必須 | API ユーザーのパスワードの **bcrypt ハッシュ**（平文は設定しない。平文だと起動しない） |
+| `CORS_ALLOWED_ORIGINS` | 任意 | ブラウザからの呼び出しを許可するオリジン（カンマ区切り）。**未設定ならすべて拒否**（`*` は指定不可） |
+
+> **bcrypt ハッシュの作り方（例）**: `htpasswd -bnBC 12 "" "好きなパスワード" | tr -d ':\n'`（Apache の htpasswd）や、
+> Spring Boot CLI の `spring encodepassword` などで生成できます。生成したハッシュ（`$2a$...` で始まる文字列）を設定してください。
 
 ### 1. 起動する
 
@@ -86,12 +93,27 @@ docker compose up --build
 
 > 止めたいときは、ターミナルで `Ctrl + C` を押します。
 
-### 2. カテゴリを作る
+### 2. アクセストークンを取得する
 
-別のターミナルを開いて、`curl`（コマンドで API を呼ぶ道具）で試します。
+この API は **トークン発行以外のすべての窓口が認証必須** です。別のターミナルを開き、まず `.env` に設定したユーザー名とパスワード（ハッシュ化前の平文）でアクセストークン（JWT）を取得します。
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"username":"API_USER_NAME に設定した値","password":"ハッシュ化前のパスワード"}' \
+  | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+```
+
+トークンは **1 時間で失効** します。失効したら同じ手順で取り直してください。
+以降のすべてのリクエストに `-H "Authorization: Bearer $TOKEN"` を付けます（付け忘れると 401 が返ります）。
+
+### 3. カテゴリを作る
+
+`curl`（コマンドで API を呼ぶ道具）で試します。
 
 ```bash
 curl -X POST http://localhost:8080/api/categories \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"食費"}'
 ```
@@ -102,12 +124,13 @@ curl -X POST http://localhost:8080/api/categories \
 { "id": 1, "name": "食費" }
 ```
 
-### 3. 支出を登録する
+### 4. 支出を登録する
 
 さきほど作ったカテゴリの `id`（ここでは `1`）を指定して登録します。
 
 ```bash
 curl -X POST http://localhost:8080/api/expenses \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"amount":1280,"categoryId":1,"description":"ランチ","spentOn":"2026-06-09"}'
 ```
@@ -128,10 +151,10 @@ curl -X POST http://localhost:8080/api/expenses \
 
 > `amount` は DB 列（`numeric(19,2)`）に合わせて常に小数2桁で返ります（`1280` を送っても `1280.00` が返ります）。
 
-### 4. 月の集計を見る
+### 5. 月の集計を見る
 
 ```bash
-curl "http://localhost:8080/api/expenses/summary?month=2026-06"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/expenses/summary?month=2026-06"
 ```
 
 その月の **合計** と **カテゴリ別の内訳** が返ってきます。
@@ -157,6 +180,15 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 
 「Method」は操作の種類（GET＝取得、POST＝新規作成、PUT＝更新、DELETE＝削除）です。
 `{id}` の部分には実際の番号（例：`1`）を入れます。
+
+### 認証
+
+| Method | パス | 何をする |
+|--------|------|----------|
+| POST   | `/api/auth/token` | ユーザー名とパスワードからアクセストークン（JWT・有効期限 1 時間）を発行する |
+
+このエンドポイントだけは認証不要です。**それ以外のすべての API** は、発行されたトークンを
+`Authorization: Bearer <トークン>` ヘッダに付けて呼び出します（無い・無効・期限切れは 401）。
 
 ### カテゴリ
 
@@ -199,7 +231,7 @@ curl "http://localhost:8080/api/expenses/summary?month=2026-06"
 
 ```bash
 # 2026年6月の食費（カテゴリID=1）だけを、1ページ10件で見る
-curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
 ```
 
 ---
@@ -233,6 +265,8 @@ curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=
 | 番号 | 意味 | 例 |
 |------|------|-----|
 | 400 | 入力がルール違反 | 金額が 0 以下、日付の形式ミス など |
+| 401 | 認証エラー | トークンを付けていない・トークンが無効/期限切れ、またはトークン発行時のユーザー名/パスワード誤り |
+| 403 | 権限が足りない | 認証済みだが許可されていない操作（現状の単一ユーザー構成では通常発生しない） |
 | 404 | 対象が見つからない | 存在しないカテゴリ番号や支出番号を指定した |
 | 409 | 重複している・競合している | すでにある名前のカテゴリを作ろうとした／別の操作が同じデータを先に変更していた（少し待ってからやり直す） |
 | 413 | リクエスト本文が大きすぎる | JSON ボディが上限（既定 1MB）を超えた |
@@ -244,7 +278,7 @@ curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=
 
 本リポジトリは MVP（最小構成）です。以下は**意図的に未実装**で、今後の課題として整理しています。
 
-- **認証・認可**: 現状は単一利用者向けで、エンドポイントに認証はありません。公開・マルチユーザ化の際は、API キーや JWT などの認証と所有者単位のデータ分離を別途導入する必要があります。
+- **マルチユーザー化・所有者単位のデータ分離**: 認証は JWT（`POST /api/auth/token` で発行）で全エンドポイントに導入済みですが、API ユーザーは環境変数で構成する **単一ユーザー** のみです。複数ユーザーの登録・所有者単位のデータ分離（どの支出が誰のものか）は未実装で、マルチユーザー公開の前に別途導入する必要があります。
 
 ---
 
@@ -256,6 +290,9 @@ curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=
 ```bash
 # 必須の環境変数を設定してから起動する
 export SPRING_DATASOURCE_PASSWORD=お好きなパスワード
+export JWT_SECRET=32文字以上のランダムな文字列
+export API_USER_NAME=お好きなユーザー名
+export API_USER_PASSWORD_HASH='パスワードの bcrypt ハッシュ（$2a$... で始まる）'
 # Maven のラッパー（同梱）で起動
 ./mvnw spring-boot:run
 ```
@@ -265,6 +302,10 @@ export SPRING_DATASOURCE_PASSWORD=お好きなパスワード
 | 環境変数 | 必須 | 意味 |
 |----------|------|------|
 | `SPRING_DATASOURCE_PASSWORD` | 必須 | パスワード（未設定なら起動しない） |
+| `JWT_SECRET` | 必須 | JWT 署名用の共有シークレット（32 バイト以上。未設定・短すぎなら起動しない） |
+| `API_USER_NAME` | 必須 | API ユーザーのユーザー名（未設定なら起動しない） |
+| `API_USER_PASSWORD_HASH` | 必須 | API ユーザーのパスワードの bcrypt ハッシュ（未設定・平文なら起動しない） |
+| `CORS_ALLOWED_ORIGINS` | 任意 | 許可するオリジンのカンマ区切り（未設定ならブラウザからのクロスオリジン呼び出しをすべて拒否。`*` 不可） |
 | `SPRING_DATASOURCE_URL` | 任意 | 接続先（例：`jdbc:postgresql://localhost:5432/expensetracker`） |
 | `SPRING_DATASOURCE_USERNAME` | 任意 | ユーザー名（未設定なら `expensetracker`） |
 | `SPRING_JPA_HIBERNATE_DDL_AUTO` | 任意 | スキーマ反映方針。本番は `validate` 推奨（既定は開発用の `update`） |
@@ -378,18 +419,25 @@ If you prefer to run it directly without Docker, you'll separately need **Java 2
 
 ### 0. Set up environment variables
 
-This app reads the **DB password** from an environment variable (it fails to start if it is missing, by design).
-Copy the bundled `.env.example` to `.env` and fill in the value (never commit `.env`).
+This app reads the **DB password** and the **auth (JWT) secrets** from environment variables (it fails to start if they are missing, by design).
+Copy the bundled `.env.example` to `.env` and fill in the values (never commit `.env`).
 
 ```bash
 cp .env.example .env
-# Open .env and set SPRING_DATASOURCE_PASSWORD to a value of your choice
+# Open .env and set SPRING_DATASOURCE_PASSWORD and the other required values
 ```
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `SPRING_DATASOURCE_PASSWORD` | Yes | Database password |
 | `SPRING_DATASOURCE_USERNAME` | No | DB user name (defaults to `expensetracker`) |
+| `JWT_SECRET` | Yes | Shared secret used to sign access tokens (JWT). **At least 32 bytes**; the app refuses to start if it is missing or too short |
+| `API_USER_NAME` | Yes | Username checked when issuing tokens |
+| `API_USER_PASSWORD_HASH` | Yes | **bcrypt hash** of the API user's password (never the plain text; a plain-text value refuses to start) |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated list of origins allowed to call from a browser. **Unset means every origin is rejected** (`*` is not accepted) |
+
+> **How to make a bcrypt hash (examples)**: `htpasswd -bnBC 12 "" "your-password" | tr -d ':\n'` (Apache htpasswd), or
+> `spring encodepassword` from the Spring Boot CLI. Set the generated hash (a string starting with `$2a$...`).
 
 ### 1. Start it
 
@@ -405,12 +453,27 @@ The window is open at **http://localhost:8080**.
 
 > To stop it, press `Ctrl + C` in the terminal.
 
-### 2. Create a category
+### 2. Get an access token
 
-Open another terminal and try it with `curl` (a tool for calling an API from the command line).
+Every endpoint of this API **except token issuance requires authentication**. Open another terminal and first obtain an access token (JWT) with the username and (pre-hash, plain) password you configured in `.env`.
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"username":"value of API_USER_NAME","password":"your pre-hash password"}' \
+  | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+```
+
+Tokens **expire after 1 hour**; repeat the same call to get a fresh one.
+Attach `-H "Authorization: Bearer $TOKEN"` to every request from here on (omitting it returns 401).
+
+### 3. Create a category
+
+Try it with `curl` (a tool for calling an API from the command line).
 
 ```bash
 curl -X POST http://localhost:8080/api/categories \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Food"}'
 ```
@@ -421,12 +484,13 @@ On success, the created category is returned (`id` is an automatically assigned 
 { "id": 1, "name": "Food" }
 ```
 
-### 3. Register an expense
+### 4. Register an expense
 
 Specify the `id` of the category you just created (here, `1`).
 
 ```bash
 curl -X POST http://localhost:8080/api/expenses \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"amount":1280,"categoryId":1,"description":"Lunch","spentOn":"2026-06-09"}'
 ```
@@ -447,10 +511,10 @@ Example of what comes back:
 
 > `amount` always comes back with 2 decimal places to match the DB column (`numeric(19,2)`) — sending `1280` still returns `1280.00`.
 
-### 4. View the monthly summary
+### 5. View the monthly summary
 
 ```bash
-curl "http://localhost:8080/api/expenses/summary?month=2026-06"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/expenses/summary?month=2026-06"
 ```
 
 It returns that month's **total** and a **per-category breakdown**.
@@ -476,6 +540,15 @@ It returns that month's **total** and a **per-category breakdown**.
 
 "Method" is the kind of operation (GET = read, POST = create, PUT = update, DELETE = delete).
 Replace `{id}` with an actual number (e.g. `1`).
+
+### Authentication
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| POST   | `/api/auth/token` | Issue an access token (JWT, valid for 1 hour) from a username and password |
+
+Only this endpoint is open without authentication. **Every other API** must be called with the issued token in the
+`Authorization: Bearer <token>` header (missing / invalid / expired tokens get 401).
 
 ### Categories
 
@@ -518,7 +591,7 @@ Besides `content` (the array of items), the response includes `page` / `size` / 
 
 ```bash
 # Only Food (category ID = 1) expenses in June 2026, 10 per page
-curl "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/expenses?month=2026-06&categoryId=1&page=0&size=10"
 ```
 
 ---
@@ -552,6 +625,8 @@ What the `status` number means:
 | Code | Meaning | Example |
 |------|---------|---------|
 | 400 | Input breaks a rule | Amount ≤ 0, malformed date, etc. |
+| 401 | Authentication error | Missing / invalid / expired token, or wrong username/password when issuing a token |
+| 403 | Not allowed | Authenticated but not permitted (does not normally occur with the current single-user setup) |
 | 404 | Target not found | A category/expense number that doesn't exist |
 | 409 | Conflict (duplicate / concurrent update) | Trying to create a category whose name already exists, or another operation modified the same data first (retry after a moment) |
 | 413 | Request body too large | The JSON body exceeded the limit (1MB by default) |
@@ -563,7 +638,7 @@ What the `status` number means:
 
 This repository is an MVP. The following are **intentionally not implemented** and tracked as future work.
 
-- **Authentication / authorization**: The API is currently single-user and has no auth on its endpoints. Before going public or multi-user, add authentication (API key, JWT, etc.) and per-owner data isolation.
+- **Multi-user support / per-owner data isolation**: JWT authentication (issued via `POST /api/auth/token`) now protects every endpoint, but the API user is a **single user** configured through environment variables. Registering multiple users and isolating data per owner (whose expense is whose) are not implemented, and must be added before a multi-user launch.
 
 ---
 
@@ -573,8 +648,11 @@ If you can provide **Java 21** and **PostgreSQL 16** locally, you can start it d
 **Before starting, you must set `SPRING_DATASOURCE_PASSWORD`** (it fails to start if it is missing, by design).
 
 ```bash
-# Set the required environment variable, then start
+# Set the required environment variables, then start
 export SPRING_DATASOURCE_PASSWORD=a-password-of-your-choice
+export JWT_SECRET=a-random-string-of-32-bytes-or-more
+export API_USER_NAME=a-username-of-your-choice
+export API_USER_PASSWORD_HASH='bcrypt hash of the password (starts with $2a$...)'
 # Start via the bundled Maven wrapper
 ./mvnw spring-boot:run
 ```
@@ -584,6 +662,10 @@ The connection and other settings can be overridden with these environment varia
 | Environment variable | Required | Meaning |
 |----------------------|----------|---------|
 | `SPRING_DATASOURCE_PASSWORD` | Yes | Password (app won't start if unset) |
+| `JWT_SECRET` | Yes | Shared secret for signing JWTs (32+ bytes; the app won't start if unset or too short) |
+| `API_USER_NAME` | Yes | API user's username (the app won't start if unset) |
+| `API_USER_PASSWORD_HASH` | Yes | bcrypt hash of the API user's password (the app won't start if unset or plain text) |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated allowed origins (unset rejects every cross-origin browser call; `*` not accepted) |
 | `SPRING_DATASOURCE_URL` | No | Connection target (e.g. `jdbc:postgresql://localhost:5432/expensetracker`) |
 | `SPRING_DATASOURCE_USERNAME` | No | Username (defaults to `expensetracker`) |
 | `SPRING_JPA_HIBERNATE_DDL_AUTO` | No | Schema strategy. Use `validate` in production (defaults to `update` for dev) |

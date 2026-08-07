@@ -7,6 +7,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 // DB アクセス層の例外（接続失敗・SQL 実行失敗等）
 import org.springframework.dao.DataAccessException;
+// 認証失敗（ユーザー名・パスワード不一致等）を表す Spring Security の例外の基底クラス
+import org.springframework.security.core.AuthenticationException;
 // HTTP ヘッダを表すクラス
 import org.springframework.http.HttpHeaders;
 // HTTP ステータスを表す列挙
@@ -124,6 +126,20 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 // 本体にステータスと安全なメッセージを格納する
                 .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(), message));
+    }
+
+    // トークン発行（POST /api/auth/token）での認証失敗を 401 として処理するハンドラ。
+    // フィルタ層（Bearer トークン検証）の 401 は SecurityConfig のエントリポイントが整形するが、
+    // コントローラ経由の認証（AuthTokenService の AuthenticationManager 照合）で失敗した
+    // AuthenticationException はここへ届くため、同じ {status, message} 契約に揃えて整形する。
+    // ユーザー名とパスワードのどちらが誤りかは区別せず、一律の安全な文言だけを返す
+    // （ユーザー名の存在有無を推測させない。§9 内部情報を漏らさない）
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ErrorResponse> handleAuthenticationFailure(AuthenticationException ex) {
+        // 401 のエラーレスポンスを返す（例外メッセージは内部情報を含みうるため使わない）
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                // 本体にステータスと一元管理された安全な文言を格納する
+                .body(new ErrorResponse(HttpStatus.UNAUTHORIZED.value(), ErrorMessages.AUTH_FAILED));
     }
 
     // DB アクセス障害（500）を処理するハンドラ。詳細はログにのみ残し、外部には汎用文言を返す
