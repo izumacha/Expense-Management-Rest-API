@@ -91,6 +91,16 @@
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
+        <!-- OAuth2 リソースサーバ機能（JWT の検証・HS256 の署名／復号に使う Nimbus JOSE を含む） -->
+        <!-- POST /api/auth/token が発行した Bearer トークン（JWT）を、各リクエストで検証するために導入する。 -->
+        <!-- バージョンは Spring Boot の親 POM（BOM）が管理するため指定しない（§9 サプライチェーン管理） -->
+        <dependency>
+            <!-- Spring Boot のグループ ID -->
+            <groupId>org.springframework.boot</groupId>
+            <!-- OAuth2 Resource Server スターター -->
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+
         <!-- テスト関連の依存（JUnit 等を含む） -->
         <dependency>
             <!-- Spring Boot のグループ ID -->

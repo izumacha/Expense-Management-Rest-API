@@ -27,10 +27,12 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.TestPropertySource;
 // HTTP リクエストを擬似実行するクライアント
 import org.springframework.test.web.servlet.MockMvc;
-// @WebMvcTest のデフォルト認証要求を無効化し、実際の SecurityConfig（permitAll）を読み込むために使う
+// 実際の SecurityConfig（JWT 認証必須）をスライスへ読み込むために使う
 import org.springframework.context.annotation.Import;
-// セキュリティ設定クラス（anyRequest().permitAll() を定義）
+// セキュリティ設定クラス（トークン発行以外を認証必須にする）
 import com.izumacha.expensetracker.config.SecurityConfig;
+// JWT のデコーダ／エンコーダ Bean を提供する設定クラス（SecurityConfig が JwtDecoder を必要とする）
+import com.izumacha.expensetracker.config.JwtConfig;
 
 // any() マッチャを取り込む（Mockito）
 import static org.mockito.ArgumentMatchers.any;
@@ -38,14 +40,17 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 // GET リクエストを組み立てる get を取り込む
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+// 認証済みの JWT をテストリクエストへ載せる jwt ポストプロセッサを取り込む（spring-security-test）
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 // レスポンスのステータスを検証する status を取り込む
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // レート制限フィルタの挙動を検証する（上限を 2 に下げて超過を起こす）
 @WebMvcTest(CategoryController.class)
-// @WebMvcTest はデフォルトで Spring Security の認証要求を有効化するが、
-// 実際のアプリは anyRequest().permitAll() なので SecurityConfig を明示インポートして一致させる
-@Import(SecurityConfig.class)
+// 実際のアプリと同じセキュリティ設定（JWT 認証必須）で検証するため、SecurityConfig と
+// その依存（JwtDecoder を提供する JwtConfig）を明示インポートする。テスト用シークレットは
+// src/test/resources/application.properties の security.jwt.secret が供給する
+@Import({SecurityConfig.class, JwtConfig.class})
 // 単位時間あたりの上限を 2 に、ウィンドウを十分長くしてテスト中に切り替わらないようにする
 @TestPropertySource(properties = {"app.rate-limit.capacity=2", "app.rate-limit.window-seconds=3600"})
 class RateLimitFilterTest {
@@ -68,18 +73,20 @@ class RateLimitFilterTest {
     }
 
     // 上限（2）を超える 3 回目のリクエストは 429 になることを検証する
+    // （JWT 認証必須化に伴い、認証で 401 にならないよう jwt() で認証済みトークンを載せる。
+    //  レート制限フィルタ自体は認証より先（HIGHEST_PRECEDENCE）に実行される）
     @Test
     void 上限超過は429() throws Exception {
         // 1 回目（上限内）は 200 になることを検証する
-        mockMvc.perform(get("/api/categories"))
+        mockMvc.perform(get("/api/categories").with(jwt()))
                 // ステータスが 200 であることを検証する
                 .andExpect(status().isOk());
         // 2 回目（上限内）は 200 になることを検証する
-        mockMvc.perform(get("/api/categories"))
+        mockMvc.perform(get("/api/categories").with(jwt()))
                 // ステータスが 200 であることを検証する
                 .andExpect(status().isOk());
         // 3 回目（上限超過）は 429 になることを検証する
-        mockMvc.perform(get("/api/categories"))
+        mockMvc.perform(get("/api/categories").with(jwt()))
                 // ステータスが 429 であることを検証する
                 .andExpect(status().isTooManyRequests());
     }

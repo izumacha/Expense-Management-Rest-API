@@ -62,4 +62,15 @@ public final class ErrorMessages {
 
     // リクエスト本文が上限サイズを超えたときの安全な文言（しきい値の詳細は含めない）
     public static final String PAYLOAD_TOO_LARGE = "リクエスト本文が大きすぎます";
+
+    // 未認証アクセス（トークン無し・署名不正・期限切れ等）に返す安全な文言。
+    // 「トークンが無いのか無効なのか」を区別して伝えない（攻撃者への手掛かりを減らす。§9）
+    public static final String UNAUTHORIZED = "認証が必要です";
+
+    // 認証済みだが必要な権限が無いアクセスに返す安全な文言（必要なロール名等の内部情報は含めない）
+    public static final String FORBIDDEN = "この操作を行う権限がありません";
+
+    // トークン発行時の認証失敗（ユーザー名またはパスワード不一致）に返す安全な文言。
+    // どちらが間違っているかを区別して伝えない（ユーザー名の存在有無を推測させない。§9）
+    public static final String AUTH_FAILED = "ユーザー名またはパスワードが正しくありません";
 }

@@ -18,6 +18,8 @@ UI を持たない API で、ドメイン語彙は日本語（カテゴリ / 支
 
 API レスポンスはすべて JSON。エラー形式は `{ "status": int, "message": string }`、入力検証は Jakarta Bean Validation。
 
+認証は **JWT（Resource Server 方式・HS256 共有シークレット）**。`POST /api/auth/token` にユーザー名とパスワードを送るとアクセストークン（有効期限 1 時間）が発行され、それ以外の全エンドポイントは `Authorization: Bearer <トークン>` が必須（未認証は 401 / 権限不足は 403 を同じエラー契約で返す）。API ユーザーは MVP として環境変数で構成する単一ユーザーのみ。CORS は許可オリジンの明示リスト制限（未設定なら全拒否・`*` 指定は起動失敗）。
+
 ## 2. コマンド
 
 すべてリポジトリ直下で実行する。
@@ -31,24 +33,34 @@ docker compose up --build        # PostgreSQL + アプリを一括起動（推�
 
 `./mvnw -B verify` のうち `repository/` 配下のテストは Testcontainers で PostgreSQL コンテナを起動するため、**Docker デーモンが必要**（無い環境では該当テストのみ初期化エラーになる）。
 
+起動には次の環境変数が必要（未設定は fail-closed で起動失敗。`.env.example` 参照）: `SPRING_DATASOURCE_PASSWORD`（DB パスワード）/ `JWT_SECRET`（JWT 署名用シークレット・32 バイト以上）/ `API_USER_NAME`（API ユーザー名）/ `API_USER_PASSWORD_HASH`（パスワードの bcrypt ハッシュ。平文不可）。任意: `CORS_ALLOWED_ORIGINS`（許可オリジンのカンマ区切り。未設定なら全拒否）。
+
 ## 3. アーキテクチャ
 
 ### 層構成（`src/main/java/com/izumacha/expensetracker/`）
 
 層構成と責務:
 
-- `controller/` — HTTP エンドポイント。リクエストを service 呼び出しにマップし、適切なステータス（201/400/404/409）で JSON を返す。
-- `service/` — ビジネスロジック（`CategoryService` / `ExpenseService`）。検証・重複チェック・CRUD オーケストレーション。
+- `controller/` — HTTP エンドポイント。リクエストを service 呼び出しにマップし、適切なステータス（201/400/404/409）で JSON を返す。`AuthController`（`POST /api/auth/token`）はアクセストークン発行の唯一の認証不要エンドポイント。
+- `service/` — ビジネスロジック（`CategoryService` / `ExpenseService` / `AuthTokenService`）。検証・重複チェック・CRUD オーケストレーション。`AuthTokenService` は資格情報の照合（AuthenticationManager）と JWT 発行（TTL は `TOKEN_TTL_SECONDS` = 1 時間）。
 - `repository/` — Spring Data JPA。CRUD とカスタムクエリ（`existsByName`、月/カテゴリ絞り込み等）。
 - `domain/` — JPA エンティティ（`Category` / `Expense`、`@PrePersist` で `createdAt`）。
 - `dto/request/` ・ `dto/response/` — 入力検証用と出力整形用を分離し、内部エンティティを API 契約から切り離す。
 - `exception/` — `GlobalExceptionHandler` ＋カスタム例外（`NotFoundException` / `DuplicateException`）を HTTP ステータスへマップ。
-- `config/` — Spring Security 設定（`SecurityConfig`）とタイムゾーン固定（`TimeZoneConfig`）。
+- `config/` — Spring Security 設定（`SecurityConfig`: JWT 認証必須化・CORS 許可オリジン制限・401/403 のエラー契約整形）、JWT の鍵構成（`JwtConfig`: HS256 共有シークレットの検証と JwtEncoder/JwtDecoder。シークレット未設定・32 バイト未満は起動失敗）、API ユーザー構成（`ApiUserConfig`: 環境変数由来の単一ユーザー + bcrypt 照合。未設定・平文ハッシュは起動失敗）、タイムゾーン固定（`TimeZoneConfig`）。
 - `security/` — IP ベースのレート制限フィルタ（`RateLimitFilter`）。
 - `validation/` — Bean Validation 制約（`MaxCodePoints`、コードポイント単位の文字数検証）とカテゴリ名の正規化ユーティリティ（`CategoryNameNormalizer`、前後空白除去 + Unicode NFC 正規化。制約自体ではなく DTO の正規コンストラクタから呼ばれる前処理）。
 - `web/` — 横断的関心事: エラー応答の共通整形（`ApiErrorWriter`）、ページング入力の無害化（`PageableSanitizer`）、リクエスト本文サイズ上限（`RequestBodySizeLimitFilter`）。
 
 設計原則: DTO 分離、ループ内個別クエリを避ける（N+1 回避、§8）、金額は `BigDecimal`。設定は `src/main/resources/application.yml`、コンテナ化は `Dockerfile` ＋ `docker-compose.yml`、Maven ラッパーは `.mvn/wrapper/`。
+
+### 認証・CORS の不変条件
+
+- `SecurityConfig` の `anyRequest().authenticated()` を弱めない。認証不要にしてよいのは `POST /api/auth/token`（と ERROR ディスパッチ）のみ。
+- fail-closed を維持する: `JWT_SECRET` 未設定/32 バイト未満、`API_USER_NAME`/`API_USER_PASSWORD_HASH` 未設定/平文、CORS の `*` 指定は、いずれも起動失敗にする（実行時に静かに壊さない）。
+- CSRF 無効はステートレス Bearer 認証（Cookie 不使用・セッション STATELESS）が前提。Cookie 認証を導入する場合は CSRF 保護を再有効化する。
+- 401/403 も既存のエラー契約 `{ "status", "message" }`（`ApiErrorWriter` / `ErrorMessages`）で返す。トークン発行の認証失敗はユーザー名・パスワードのどちらが誤りかを区別しない文言にする（ユーザー列挙防止）。
+- CORS の許可メソッド/ヘッダは最小限（GET/POST/PUT/DELETE、Authorization/Content-Type）を維持し、`allowCredentials` は false のままにする。
 
 ### CI
 

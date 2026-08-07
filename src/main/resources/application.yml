@@ -81,6 +81,32 @@ server:
     # フォーム POST の最大サイズ（巨大ボディによるリソース枯渇を防ぐ）
     max-http-form-post-size: 1MB
 
+# 認証・CORS などセキュリティ関連の設定（自作の config クラスで参照する）
+security:
+  # JWT（JSON Web Token。署名付きのアクセストークン）に関する設定
+  jwt:
+    # HS256 署名用の共有シークレット（環境変数 JWT_SECRET から与える。秘密情報のため既定値は空）。
+    # 空文字の既定値を許すのは、未設定を JwtConfig 側で検出して「どの環境変数をどう直すか」が
+    # 分かる明確なメッセージで起動失敗（fail-closed）させるため（プレースホルダ解決エラーより親切）。
+    # 32 バイト（256 ビット）未満のシークレットも HS256 の強度要件を満たさないため起動失敗にする。
+    secret: ${JWT_SECRET:}
+  # トークン発行（POST /api/auth/token）で照合する API ユーザーに関する設定。
+  # MVP のため単一ユーザーのみ（DB のユーザーテーブルは持たない）。
+  api-user:
+    # API ユーザーのユーザー名（環境変数 API_USER_NAME から与える。未設定は起動失敗＝fail-closed）
+    name: ${API_USER_NAME:}
+    # API ユーザーのパスワードの bcrypt ハッシュ（環境変数 API_USER_PASSWORD_HASH から与える）。
+    # 平文パスワードではなくハッシュを受け取ることで、環境変数にも平文を置かない（§9 暗号は自前実装しない）。
+    # 未設定・bcrypt 形式でない値は ApiUserConfig が起動失敗にする（fail-closed）
+    password-hash: ${API_USER_PASSWORD_HASH:}
+  # CORS（ブラウザからのクロスオリジン呼び出し許可）に関する設定
+  cors:
+    # 許可するオリジンのカンマ区切りリスト（環境変数 CORS_ALLOWED_ORIGINS から与える。
+    # 例: https://app.example.com,https://admin.example.com）。
+    # 未設定（空）の場合は「どのオリジンも許可しない」＝ブラウザからのクロスオリジン呼び出しを
+    # すべて拒否する fail-closed 既定。ワイルドカード（*）は指定しても許可しない（SecurityConfig 側で拒否）
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
 # アプリ固有の設定（自作の機能で参照する）
 app:
   # レート制限（短時間の大量アクセスを抑制して DoS を防ぐ）に関する設定

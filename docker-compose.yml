@@ -53,6 +53,14 @@ services:
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-expensetracker}
       # 接続パスワード（.env から与える。未設定なら起動を失敗させる＝fail-closed）
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:?SPRING_DATASOURCE_PASSWORD を .env で設定してください}
+      # アクセストークン（JWT）の署名用共有シークレット（.env から与える。未設定なら起動を失敗させる＝fail-closed）
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET（32 バイト以上）を .env で設定してください}
+      # トークン発行で照合する API ユーザーのユーザー名（.env から与える。未設定なら起動を失敗させる）
+      API_USER_NAME: ${API_USER_NAME:?API_USER_NAME を .env で設定してください}
+      # API ユーザーのパスワードの bcrypt ハッシュ（.env から与える。平文は設定しない。未設定なら起動を失敗させる）
+      API_USER_PASSWORD_HASH: ${API_USER_PASSWORD_HASH:?API_USER_PASSWORD_HASH（bcrypt ハッシュ）を .env で設定してください}
+      # ブラウザ呼び出しを許可するオリジンのカンマ区切り（任意。未設定なら全オリジン拒否＝fail-closed）
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     # ホストへ待受ポートを公開する
     ports:
       # ホスト 8080 をコンテナ 8080 に割り当てる
