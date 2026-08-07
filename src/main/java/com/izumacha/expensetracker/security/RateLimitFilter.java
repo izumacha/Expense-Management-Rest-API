@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 // ロガーを生成するファクトリ
 import org.slf4j.LoggerFactory;
+// トークン発行エンドポイントのパス定数を参照する（重み付けの判定に使う。定義元は SecurityConfig の 1 箇所）
+import com.izumacha.expensetracker.config.SecurityConfig;
 // 外部向けエラーメッセージ定数を参照する
 import com.izumacha.expensetracker.exception.ErrorMessages;
 // {status, message} 形式のエラー応答を書き出す共通ユーティリティ
@@ -37,6 +39,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 // 「最優先」を表す定数 Ordered.HIGHEST_PRECEDENCE を参照する
 import org.springframework.core.Ordered;
+// HTTP メソッド（GET/POST 等）を表す列挙。トークン発行かどうかの判定に使う
+import org.springframework.http.HttpMethod;
 // HTTP ステータスを表す列挙
 import org.springframework.http.HttpStatus;
 // Spring に管理させるためのコンポーネント宣言
@@ -102,6 +106,23 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // （攻撃者は最後のヘッダ行の末尾トークンを偽装できないため）。
     private static final Pattern IPV6_PATTERN =
             Pattern.compile("^(?=.*:)[0-9a-fA-F:]{2,39}$");
+
+    // トークン発行（POST /api/auth/token）1 回が消費するレート制限の枠数。
+    //
+    // 【なぜ通常リクエストより重く数えるか】この 1 本だけは未認証で呼べて、しかも中で bcrypt の
+    // パスワード照合という意図的に重い計算を回す。他のエンドポイント（DB を引くだけの CRUD）と
+    // 同じ 1 枠で数えると、既定の 120 回/分がそのまま「1 分あたり 120 回のパスワード推測」と
+    // 「1 分あたり 120 回の bcrypt 実行」を許すことになり、総当たりにも CPU 枯渇にも
+    // 一般 API 向けに設定された枠が流用されてしまう（§9 公開エンドポイントを保護する）。
+    // 12 枠を消費させることで、既定値 120 回/60 秒のままトークン発行だけが 10 回/分に絞られ、
+    // 通常の CRUD の流量には一切影響しない。
+    //
+    // アカウントロックアウトではなく送信元単位の絞り込みにしているのは、API ユーザーが単一で
+    // ロックアウトすると攻撃者が正規利用者を締め出せてしまう（可用性への攻撃）ため。
+    static final int AUTH_ENDPOINT_REQUEST_COST = 12;
+
+    // 通常のリクエストが消費する枠数（1 リクエスト = 1 枠）
+    private static final int DEFAULT_REQUEST_COST = 1;
 
     // 1 つの送信元が単位時間内に許可されるリクエスト数の上限
     private final int capacity;
@@ -192,8 +213,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // Retry-After を返す」不整合が起こり、実際には制限が解けているのにクライアントを最大
         // 1 ウィンドウ分余計に待たせてしまう。同一時刻を使えば両者は常に同じウィンドウ基準になる
         long nowSeconds = System.currentTimeMillis() / 1000;
+        // このリクエストが消費する枠数を決める（トークン発行だけ重く数える）
+        int cost = requestCost(request);
         // 上限超過なら 429 を返して処理を打ち切る
-        if (isOverLimit(clientKey, nowSeconds)) {
+        if (isOverLimit(clientKey, nowSeconds, cost)) {
             // 再試行までの目安秒数（現在の固定ウィンドウの残り秒数）をヘッダで伝える。
             // 固定値 windowSeconds を返すと、ウィンドウ終了間際に 429 を受けたクライアントまで
             // まるまる 1 ウィンドウ分待たされてしまうため、実際に制限が解けるまでの残り時間を返す
@@ -205,6 +228,22 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
         // 上限内なので後続の処理へ進める
         filterChain.doFilter(request, response);
+    }
+
+    // このリクエストがレート制限の枠を何個消費するかを返す。
+    // トークン発行（POST /api/auth/token）は未認証で呼べて bcrypt 照合という重い計算を伴うため、
+    // 通常のリクエストより多くの枠を消費させて総当たり・CPU 枯渇の速度を落とす（§9）。
+    //
+    // 消費量は capacity で上限を切る。capacity を AUTH_ENDPOINT_REQUEST_COST より小さく設定した
+    // 環境（テストや極端に絞った運用）で「1 回目のトークン発行が必ず 429」という、
+    // 動いているように見えて認証できない壊れ方を避けるため（最低 1 回は試せることを保証する）。
+    private int requestCost(HttpServletRequest request) {
+        // POST かつパスがトークン発行エンドポイントのときだけ重い扱いにする
+        // （パスの定義は SecurityConfig 側の 1 箇所を参照する。§6 定数の一元管理）
+        boolean isTokenRequest = HttpMethod.POST.matches(request.getMethod())
+                && SecurityConfig.TOKEN_ENDPOINT.equals(request.getRequestURI());
+        // トークン発行なら重い枠数（ただし capacity を超えない）、それ以外は 1 枠を返す
+        return isTokenRequest ? Math.min(AUTH_ENDPOINT_REQUEST_COST, capacity) : DEFAULT_REQUEST_COST;
     }
 
     // 指定時刻が属する固定ウィンドウが終わる（＝レート制限が解ける）までの残り秒数を返す。
@@ -318,9 +357,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 || IPV6_PATTERN.matcher(candidate).matches();
     }
 
-    // 送信元のカウントを 1 増やし、単位時間内の上限を超えたかを返す
-    // （nowSeconds は呼び出し側が一度だけ取得した現在時刻。Retry-After 計算と同じ値を共有する）
-    private boolean isOverLimit(String clientKey, long nowSeconds) {
+    // 送信元のカウントを cost の分だけ増やし、単位時間内の上限を超えたかを返す
+    // （nowSeconds は呼び出し側が一度だけ取得した現在時刻。Retry-After 計算と同じ値を共有する。
+    //   cost は requestCost() が決めるこのリクエストの重み。通常は 1、トークン発行だけ重くなる）
+    private boolean isOverLimit(String clientKey, long nowSeconds, int cost) {
         // 指定時刻が属する固定ウィンドウ番号（秒を単位時間で割った商）を求める
         long currentWindow = nowSeconds / windowSeconds;
         // マップが肥大化しないよう、上限に達したら古いウィンドウの項目を掃除する。
@@ -377,8 +417,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
             // それ以外（新規／同じキーのウィンドウ切替）は新しいウィンドウ（カウント 0）を作る
             return new Window(currentWindow);
         });
-        // カウントを 1 増やし、単位時間の上限を超えたかどうかを返す
-        return window.count.incrementAndGet() > capacity;
+        // カウントをこのリクエストの重み分だけ増やし、単位時間の上限を超えたかどうかを返す
+        return window.count.addAndGet(cost) > capacity;
     }
 
     // 1 つの送信元の「対象ウィンドウ番号」と「そのウィンドウ内のカウント」を表す内部クラス

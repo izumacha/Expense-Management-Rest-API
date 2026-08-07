@@ -76,9 +76,10 @@ public class SecurityConfig {
     // すべてのオリジンを表すワイルドカード（指定を拒否するための比較用定数）
     private static final String ORIGIN_WILDCARD = "*";
 
-    // トークン発行エンドポイントのパス（唯一の認証不要 API。AuthController のマッピングと一致させる）
-    // 同一パッケージのテストから参照できるようパッケージプライベートにしている
-    static final String TOKEN_ENDPOINT = "/api/auth/token";
+    // トークン発行エンドポイントのパス（唯一の認証不要 API。AuthController のマッピングと一致させる）。
+    // 「どのパスが認証情報を検証する入り口か」の定義はここ 1 箇所に保つ（§6 定数の一元管理）。
+    // 別パッケージの RateLimitFilter（security）も同じ判断に使うため public にしている
+    public static final String TOKEN_ENDPOINT = "/api/auth/token";
 
     // CORS で許可するオリジンの一覧（環境変数由来。空リストなら全オリジン拒否＝fail-closed）
     private final List<String> allowedOrigins;
