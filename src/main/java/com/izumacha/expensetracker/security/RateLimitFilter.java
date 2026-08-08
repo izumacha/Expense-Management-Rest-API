@@ -253,12 +253,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
             // （パスの定義は SecurityConfig 側の 1 箇所を参照する。§6 定数の一元管理）
             path = resolveApplicationPath(request);
         } catch (IllegalArgumentException e) {
-            // デコードできない URI は判定不能。握りつぶさず debug ログに残したうえで安全側の枠数を返す
+            // デコードできない URI は判定不能。握りつぶさず debug ログに残す
             // （外部由来の値なのでログ前に無害化する。§9 ログ偽装・ログ肥大の防止）
             log.debug("リクエストパスをデコードできなかったため、レート制限を安全側（重い枠）で数えます: {}",
                     sanitizeForLog(request.getRequestURI()));
-            // fail-closed で重い側の枠を消費させる（理由は requestCostForUndecodablePath のコメント参照）
-            return requestCostForUndecodablePath();
+            // fail-closed（§9「不明なら拒否」）: パスを確定できない以上「トークン発行ではない」と
+            // 確信できないため、重い側の枠を消費させる。デコードできない URI は Spring MVC 側でも
+            // ルーティングできず必ずエラーになる（＝正規利用者の通常操作では発生しない）ので、
+            // 重く数えても正当なトラフィックには影響しない
+            return expensiveRequestCost();
         }
         // トークン発行なら重い枠数（ただし capacity を超えない）、それ以外は 1 枠を返す
         return SecurityConfig.TOKEN_ENDPOINT.equals(path) ? expensiveRequestCost() : DEFAULT_REQUEST_COST;
@@ -293,25 +296,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // UrlPathHelper は Spring MVC 自身がパス解決に使うユーティリティで、既定インスタンスは
     // 「セミコロン内容の除去 → コンテキストパス除去 → URL デコード」を行う。照合相手と同じ
     // 正規化を通すことで、上記の食い違いを原理的に無くす（自前でデコード処理を書かない。§6 再利用）。
-    // 【デコードできないパスの扱い — 例外を外へ出さない】
+    //
+    // 【呼び出し側は必ず IllegalArgumentException を捕捉すること】
     // UrlPathHelper は不正なパーセントエンコード（"%zz"、末尾の裸の "%" 等）に対して
     // IllegalArgumentException("Invalid encoded sequence ...") を投げる。本フィルタは
     // @Order(HIGHEST_PRECEDENCE) で Spring Security よりも DispatcherServlet よりも先に走るため、
-    // ここで例外を投げると GlobalExceptionHandler に届かず、コンテナ既定の 500 になって
+    // 例外をそのまま外へ出すと GlobalExceptionHandler に届かず、コンテナ既定の 500 になって
     // {status, message} のエラー契約が壊れる（このクラスのコンストラクタが windowSeconds=0 に
     // ついて警戒しているのと同じ壊れ方）。現行の組込 Tomcat はこの種の URI をコネクタ層で
-    // 400 にするため実害は出ていないが、コネクタ設定次第で表に出る潜在バグなので握りつぶさず
-    // フィルタ内で完結させる。
-    //
-    // 復帰方針は fail-closed（§9「不明なら拒否」）: パスを確定できない以上「トークン発行では
-    // ないと確信できない」ため、重い側の枠を消費させる。デコードできない URI は Spring MVC 側でも
-    // ルーティングできず必ずエラーになる（＝正規利用者の通常操作では発生しない）ので、重く数えても
-    // 正当なトラフィックには影響しない。
-    private int requestCostForUndecodablePath() {
-        // 判定不能なので安全側（重い枠）に倒す
-        return expensiveRequestCost();
-    }
-
+    // 400 にするため実害は出ていないが、コネクタ設定次第で表に出るためフィルタ内で完結させる。
     private static String resolveApplicationPath(HttpServletRequest request) {
         // Spring 標準の共有インスタンスでアプリ内パス（デコード済み・コンテキストパス除去済み）を求めて返す
         return UrlPathHelper.defaultInstance.getPathWithinApplication(request);
