@@ -241,12 +241,35 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // 環境（テストや極端に絞った運用）で「1 回目のトークン発行が必ず 429」という、
     // 動いているように見えて認証できない壊れ方を避けるため（最低 1 回は試せることを保証する）。
     private int requestCost(HttpServletRequest request) {
-        // POST かつパスがトークン発行エンドポイントのときだけ重い扱いにする
-        // （パスの定義は SecurityConfig 側の 1 箇所を参照する。§6 定数の一元管理）
-        boolean isTokenRequest = HttpMethod.POST.matches(request.getMethod())
-                && SecurityConfig.TOKEN_ENDPOINT.equals(resolveApplicationPath(request));
+        // POST 以外は重い扱いにしない（トークン発行は POST のみ許可されているため）
+        if (!HttpMethod.POST.matches(request.getMethod())) {
+            // 通常どおり 1 枠だけ消費させる
+            return DEFAULT_REQUEST_COST;
+        }
+        // パスの正規化（デコード）は不正なパーセントエンコードで例外を投げうるので必ず捕捉する
+        String path;
+        try {
+            // パスがトークン発行エンドポイントかどうかを、正規化したアプリ内パスで判定する
+            // （パスの定義は SecurityConfig 側の 1 箇所を参照する。§6 定数の一元管理）
+            path = resolveApplicationPath(request);
+        } catch (IllegalArgumentException e) {
+            // デコードできない URI は判定不能。握りつぶさず debug ログに残したうえで安全側の枠数を返す
+            // （外部由来の値なのでログ前に無害化する。§9 ログ偽装・ログ肥大の防止）
+            log.debug("リクエストパスをデコードできなかったため、レート制限を安全側（重い枠）で数えます: {}",
+                    sanitizeForLog(request.getRequestURI()));
+            // fail-closed で重い側の枠を消費させる（理由は requestCostForUndecodablePath のコメント参照）
+            return requestCostForUndecodablePath();
+        }
         // トークン発行なら重い枠数（ただし capacity を超えない）、それ以外は 1 枠を返す
-        return isTokenRequest ? Math.min(AUTH_ENDPOINT_REQUEST_COST, capacity) : DEFAULT_REQUEST_COST;
+        return SecurityConfig.TOKEN_ENDPOINT.equals(path) ? expensiveRequestCost() : DEFAULT_REQUEST_COST;
+    }
+
+    // トークン発行 1 回が実際に消費する枠数（重み。ただし capacity を超えない）を返す。
+    // capacity を AUTH_ENDPOINT_REQUEST_COST より小さく設定した環境で「1 回目のトークン発行が
+    // 必ず 429」という、動いているように見えて認証できない壊れ方を避けるための頭打ち
+    private int expensiveRequestCost() {
+        // 重みと capacity の小さい方を返す（最低 1 回は試せることを保証する）
+        return Math.min(AUTH_ENDPOINT_REQUEST_COST, capacity);
     }
 
     // リクエストパスを「アプリ内パス」（コンテキストパスを除き、パーセントエンコードを解いた形）で返す。
@@ -270,6 +293,25 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // UrlPathHelper は Spring MVC 自身がパス解決に使うユーティリティで、既定インスタンスは
     // 「セミコロン内容の除去 → コンテキストパス除去 → URL デコード」を行う。照合相手と同じ
     // 正規化を通すことで、上記の食い違いを原理的に無くす（自前でデコード処理を書かない。§6 再利用）。
+    // 【デコードできないパスの扱い — 例外を外へ出さない】
+    // UrlPathHelper は不正なパーセントエンコード（"%zz"、末尾の裸の "%" 等）に対して
+    // IllegalArgumentException("Invalid encoded sequence ...") を投げる。本フィルタは
+    // @Order(HIGHEST_PRECEDENCE) で Spring Security よりも DispatcherServlet よりも先に走るため、
+    // ここで例外を投げると GlobalExceptionHandler に届かず、コンテナ既定の 500 になって
+    // {status, message} のエラー契約が壊れる（このクラスのコンストラクタが windowSeconds=0 に
+    // ついて警戒しているのと同じ壊れ方）。現行の組込 Tomcat はこの種の URI をコネクタ層で
+    // 400 にするため実害は出ていないが、コネクタ設定次第で表に出る潜在バグなので握りつぶさず
+    // フィルタ内で完結させる。
+    //
+    // 復帰方針は fail-closed（§9「不明なら拒否」）: パスを確定できない以上「トークン発行では
+    // ないと確信できない」ため、重い側の枠を消費させる。デコードできない URI は Spring MVC 側でも
+    // ルーティングできず必ずエラーになる（＝正規利用者の通常操作では発生しない）ので、重く数えても
+    // 正当なトラフィックには影響しない。
+    private int requestCostForUndecodablePath() {
+        // 判定不能なので安全側（重い枠）に倒す
+        return expensiveRequestCost();
+    }
+
     private static String resolveApplicationPath(HttpServletRequest request) {
         // Spring 標準の共有インスタンスでアプリ内パス（デコード済み・コンテキストパス除去済み）を求めて返す
         return UrlPathHelper.defaultInstance.getPathWithinApplication(request);

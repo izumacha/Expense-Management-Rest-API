@@ -22,6 +22,8 @@ import org.springframework.mock.web.MockHttpServletResponse;
 
 // 検証に使う assertThat を取り込む
 import static org.assertj.core.api.Assertions.assertThat;
+// 例外が投げられないことを検証する assertThatCode を取り込む
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * トークン発行エンドポイント（POST /api/auth/token）が通常より多くのレート制限枠を消費することの検証。
@@ -201,6 +203,28 @@ class RateLimitFilterAuthEndpointCostTest {
         assertThat(viaContextPath)
                 .as("コンテキストパス配下でも重み付けは外れないはず")
                 .isEqualTo(CAPACITY / RateLimitFilter.AUTH_ENDPOINT_REQUEST_COST);
+    }
+
+    /**
+     * デコードできないパスでもフィルタから例外が漏れないこと（コンテナ既定 500 の回帰防止）。
+     *
+     * <p>パス正規化に使う {@code UrlPathHelper} は不正なパーセントエンコード（{@code "%zz"} や
+     * 末尾の裸の {@code "%"}）に対して {@code IllegalArgumentException} を投げる。本フィルタは
+     * {@code @Order(HIGHEST_PRECEDENCE)} で Spring Security よりも DispatcherServlet よりも先に
+     * 走るため、ここで例外が漏れると GlobalExceptionHandler に届かず、コンテナ既定の 500 となって
+     * {@code {status, message}} のエラー契約が壊れる。フィルタ内で捕捉して安全側の枠数で数える。
+     */
+    @Test
+    void malformedPercentEncodingDoesNotEscapeTheFilter() {
+        // 検証対象のフィルタを用意する
+        RateLimitFilter filter = filter();
+        // 代表的な不正エンコードのパターンを順に流す
+        for (String malformedUri : new String[] {"/api/%zz", "/api/auth/token%", "/api/%"}) {
+            // フィルタを 1 回通しても例外が外へ漏れないことを確認する（429 になるかどうかは問わない）
+            assertThatCode(() -> passesThrough(filter, "POST", malformedUri))
+                    .as("デコードできないパス %s でも例外を外へ出さないはず", malformedUri)
+                    .doesNotThrowAnyException();
+        }
     }
 
     /**
