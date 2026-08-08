@@ -22,6 +22,8 @@ import org.springframework.mock.web.MockHttpServletResponse;
 
 // 検証に使う assertThat を取り込む
 import static org.assertj.core.api.Assertions.assertThat;
+// 例外が投げられないことを検証する assertThatCode を取り込む
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * トークン発行エンドポイント（POST /api/auth/token）が通常より多くのレート制限枠を消費することの検証。
@@ -51,8 +53,20 @@ class RateLimitFilterAuthEndpointCostTest {
     // 指定のメソッド・パスでフィルタを 1 回通し、後続へ進めたか（=許可されたか）を返すヘルパー
     private boolean passesThrough(RateLimitFilter filter, String method, String uri)
             throws ServletException, IOException {
+        // コンテキストパス無し（ルート配備）として同名ヘルパーへ委譲する
+        return passesThrough(filter, method, uri, "");
+    }
+
+    // コンテキストパス付きの配備も再現できるヘルパー（contextPath は "" ならルート配備）
+    private boolean passesThrough(RateLimitFilter filter, String method, String uri, String contextPath)
+            throws ServletException, IOException {
         // 擬似リクエストを組み立てる
         MockHttpServletRequest request = new MockHttpServletRequest(method, uri);
+        // 生の requestURI を明示指定する（MockHttpServletRequest はコンストラクタ引数を
+        // そのまま requestURI に入れるが、エンコード済みパスを扱う意図をテスト側で明示しておく）
+        request.setRequestURI(uri);
+        // コンテキストパス（例: "/expense"）を設定する。UrlPathHelper がこの分を取り除く
+        request.setContextPath(contextPath);
         // 送信元 IP を固定して同じレート制限キーに集約させる
         request.setRemoteAddr(CLIENT_IP);
         // 擬似レスポンスを用意する
@@ -63,6 +77,27 @@ class RateLimitFilterAuthEndpointCostTest {
         filter.doFilter(request, response, chain);
         // 後続のリクエストが設定されていれば通過、されていなければ 429 で打ち切られたと判断する
         return chain.getRequest() != null;
+    }
+
+    // 指定パス・コンテキストパスへ POST し続け、429 で止まるまでに何回通ったかを返すヘルパー。
+    // 「重み付けが効いているか」は通過回数（10 回 vs 120 回）で判別できる
+    private int allowedTokenRequests(String uri, String contextPath) throws ServletException, IOException {
+        // 検証対象のフィルタを用意する
+        RateLimitFilter filter = filter();
+        // 通過した回数を数えるカウンタ
+        int allowed = 0;
+        // 重み付けが外れていれば CAPACITY 回通ってしまうので、その上限まで試行する
+        for (int i = 0; i < CAPACITY; i++) {
+            // 429 で打ち切られたらそこで数え終わる
+            if (!passesThrough(filter, "POST", uri, contextPath)) {
+                // ループを抜けて現在のカウントを確定させる
+                break;
+            }
+            // 通過したので回数を 1 増やす
+            allowed++;
+        }
+        // 通過できた回数を返す
+        return allowed;
     }
 
     /**
@@ -125,6 +160,70 @@ class RateLimitFilterAuthEndpointCostTest {
             assertThat(passesThrough(filter, "GET", SecurityConfig.TOKEN_ENDPOINT))
                     .as("%d 回目の GET は 1 枠しか消費しないので許可されるはず", i + 1)
                     .isTrue();
+        }
+    }
+
+    /**
+     * パーセントエンコードでパスを偽装しても重み付けが外れないこと（レート制限バイパスの回帰防止）。
+     *
+     * <p>"%74" は 't' のパーセントエンコードで、StrictHttpFirewall はこれを拒否せず、
+     * Spring Security も Spring MVC もデコードして {@code /api/auth/token} として扱う
+     * （実測: この URI への POST は 200 でトークンが発行される）。生の {@code getRequestURI()} と
+     * 定数を比較していた頃は、この 1 文字の細工だけで消費枠が 12 → 1 に落ち、既定値なら
+     * 総当たり試行が 10 回/分から 120 回/分へ 12 倍に緩んでいた。
+     */
+    @Test
+    void percentEncodedTokenPathStillCostsFullWeight() throws Exception {
+        // 正規のパスで通過できる回数（＝重み付けが効いているときの基準値）を求める
+        int viaCanonicalPath = allowedTokenRequests(SecurityConfig.TOKEN_ENDPOINT, "");
+        // 'token' の 't' をパーセントエンコードした偽装パスで通過できる回数を求める
+        int viaEncodedPath = allowedTokenRequests("/api/auth/%74oken", "");
+        // 偽装パスでも正規のパスと同じ回数しか通らない（＝重み付けが外れない）ことを確認する
+        assertThat(viaEncodedPath)
+                .as("パーセントエンコードでパスを偽装しても重み付けは外れないはず")
+                .isEqualTo(viaCanonicalPath);
+        // 念のため、そもそも重み付けが効いている（CAPACITY 回も通らない）ことも確認する
+        assertThat(viaEncodedPath)
+                .as("重み付けが効いていれば CAPACITY 回より前に 429 になるはず")
+                .isEqualTo(CAPACITY / RateLimitFilter.AUTH_ENDPOINT_REQUEST_COST);
+    }
+
+    /**
+     * コンテキストパス付きで配備しても重み付けが外れないこと（設定変更で静かに壊れることの回帰防止）。
+     *
+     * <p>{@code server.servlet.context-path} を設定すると {@code getRequestURI()} は
+     * {@code "<contextPath>/api/auth/token"} になる。生の値と定数を比較していた頃は、
+     * アプリ側のコード変更なしに（設定を足しただけで）総当たり対策が無効化されていた。
+     */
+    @Test
+    void tokenPathUnderContextPathStillCostsFullWeight() throws Exception {
+        // コンテキストパス "/expense" 配下のトークン発行パスで通過できる回数を求める
+        int viaContextPath = allowedTokenRequests("/expense" + SecurityConfig.TOKEN_ENDPOINT, "/expense");
+        // ルート配備のときと同じ回数しか通らない（＝重み付けが外れない）ことを確認する
+        assertThat(viaContextPath)
+                .as("コンテキストパス配下でも重み付けは外れないはず")
+                .isEqualTo(CAPACITY / RateLimitFilter.AUTH_ENDPOINT_REQUEST_COST);
+    }
+
+    /**
+     * デコードできないパスでもフィルタから例外が漏れないこと（コンテナ既定 500 の回帰防止）。
+     *
+     * <p>パス正規化に使う {@code UrlPathHelper} は不正なパーセントエンコード（{@code "%zz"} や
+     * 末尾の裸の {@code "%"}）に対して {@code IllegalArgumentException} を投げる。本フィルタは
+     * {@code @Order(HIGHEST_PRECEDENCE)} で Spring Security よりも DispatcherServlet よりも先に
+     * 走るため、ここで例外が漏れると GlobalExceptionHandler に届かず、コンテナ既定の 500 となって
+     * {@code {status, message}} のエラー契約が壊れる。フィルタ内で捕捉して安全側の枠数で数える。
+     */
+    @Test
+    void malformedPercentEncodingDoesNotEscapeTheFilter() {
+        // 検証対象のフィルタを用意する
+        RateLimitFilter filter = filter();
+        // 代表的な不正エンコードのパターンを順に流す
+        for (String malformedUri : new String[] {"/api/%zz", "/api/auth/token%", "/api/%"}) {
+            // フィルタを 1 回通しても例外が外へ漏れないことを確認する（429 になるかどうかは問わない）
+            assertThatCode(() -> passesThrough(filter, "POST", malformedUri))
+                    .as("デコードできないパス %s でも例外を外へ出さないはず", malformedUri)
+                    .doesNotThrowAnyException();
         }
     }
 

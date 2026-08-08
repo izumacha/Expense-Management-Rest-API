@@ -47,6 +47,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 // 1 リクエストにつき一度だけ実行されることを保証するフィルタ基底
 import org.springframework.web.filter.OncePerRequestFilter;
+// リクエストパスをデコードし、コンテキストパスを取り除くための Spring 標準ユーティリティ
+// （Spring Security / Spring MVC がパス照合に使うのと同じ正規化を再利用する）
+import org.springframework.web.util.UrlPathHelper;
 
 // 送信元 IP ごとに固定ウィンドウでリクエスト数を制限する簡易レート制限フィルタ（§9 公開エンドポイントを保護する）。
 // 外部ライブラリを足さず、メモリ使用も上限を設けて DoS（リソース枯渇）の起点を抑える。
@@ -238,12 +241,73 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // 環境（テストや極端に絞った運用）で「1 回目のトークン発行が必ず 429」という、
     // 動いているように見えて認証できない壊れ方を避けるため（最低 1 回は試せることを保証する）。
     private int requestCost(HttpServletRequest request) {
-        // POST かつパスがトークン発行エンドポイントのときだけ重い扱いにする
-        // （パスの定義は SecurityConfig 側の 1 箇所を参照する。§6 定数の一元管理）
-        boolean isTokenRequest = HttpMethod.POST.matches(request.getMethod())
-                && SecurityConfig.TOKEN_ENDPOINT.equals(request.getRequestURI());
+        // POST 以外は重い扱いにしない（トークン発行は POST のみ許可されているため）
+        if (!HttpMethod.POST.matches(request.getMethod())) {
+            // 通常どおり 1 枠だけ消費させる
+            return DEFAULT_REQUEST_COST;
+        }
+        // パスの正規化（デコード）は不正なパーセントエンコードで例外を投げうるので必ず捕捉する
+        String path;
+        try {
+            // パスがトークン発行エンドポイントかどうかを、正規化したアプリ内パスで判定する
+            // （パスの定義は SecurityConfig 側の 1 箇所を参照する。§6 定数の一元管理）
+            path = resolveApplicationPath(request);
+        } catch (IllegalArgumentException e) {
+            // デコードできない URI は判定不能。握りつぶさず debug ログに残す
+            // （外部由来の値なのでログ前に無害化する。§9 ログ偽装・ログ肥大の防止）
+            log.debug("リクエストパスをデコードできなかったため、レート制限を安全側（重い枠）で数えます: {}",
+                    sanitizeForLog(request.getRequestURI()));
+            // fail-closed（§9「不明なら拒否」）: パスを確定できない以上「トークン発行ではない」と
+            // 確信できないため、重い側の枠を消費させる。デコードできない URI は Spring MVC 側でも
+            // ルーティングできず必ずエラーになる（＝正規利用者の通常操作では発生しない）ので、
+            // 重く数えても正当なトラフィックには影響しない
+            return expensiveRequestCost();
+        }
         // トークン発行なら重い枠数（ただし capacity を超えない）、それ以外は 1 枠を返す
-        return isTokenRequest ? Math.min(AUTH_ENDPOINT_REQUEST_COST, capacity) : DEFAULT_REQUEST_COST;
+        return SecurityConfig.TOKEN_ENDPOINT.equals(path) ? expensiveRequestCost() : DEFAULT_REQUEST_COST;
+    }
+
+    // トークン発行 1 回が実際に消費する枠数（重み。ただし capacity を超えない）を返す。
+    // capacity を AUTH_ENDPOINT_REQUEST_COST より小さく設定した環境で「1 回目のトークン発行が
+    // 必ず 429」という、動いているように見えて認証できない壊れ方を避けるための頭打ち
+    private int expensiveRequestCost() {
+        // 重みと capacity の小さい方を返す（最低 1 回は試せることを保証する）
+        return Math.min(AUTH_ENDPOINT_REQUEST_COST, capacity);
+    }
+
+    // リクエストパスを「アプリ内パス」（コンテキストパスを除き、パーセントエンコードを解いた形）で返す。
+    //
+    // 【なぜ getRequestURI() をそのまま使ってはいけないか】
+    // getRequestURI() は生（raw）の値で、(1) パーセントエンコードが解けておらず、
+    // (2) コンテキストパスのプレフィックスが付いたままになる。一方 Spring Security の
+    // requestMatchers(...) と Spring MVC のハンドラ照合は、どちらもデコード済み・
+    // コンテキストパス除去済みのパスで判定する。つまり生の値と定数を equals で比べると、
+    // 「Security と MVC はトークン発行エンドポイントだと判定して bcrypt 照合まで実行するのに、
+    // 本フィルタだけは別パスだと判定して重み付けを外す」という食い違いが起きる。
+    //
+    // 実際に確認された 2 つの抜け穴（いずれも回帰テストで固定している）:
+    //   (1) POST /api/auth/%74oken … "%74" は 't' のパーセントエンコード。StrictHttpFirewall は
+    //       これを通し、Security も MVC もデコードして /api/auth/token として扱うため 200 で
+    //       トークンが発行される。にもかかわらず生の値は定数と一致しないため消費枠が 1 になり、
+    //       総当たり対策の重み付け（12 枠）が丸ごと外れる（既定値なら 10 回/分 → 120 回/分）。
+    //   (2) server.servlet.context-path を設定した配備では getRequestURI() が
+    //       "<contextPath>/api/auth/token" になり、重み付けが常に外れる（設定変更だけで静かに壊れる）。
+    //
+    // UrlPathHelper は Spring MVC 自身がパス解決に使うユーティリティで、既定インスタンスは
+    // 「セミコロン内容の除去 → コンテキストパス除去 → URL デコード」を行う。照合相手と同じ
+    // 正規化を通すことで、上記の食い違いを原理的に無くす（自前でデコード処理を書かない。§6 再利用）。
+    //
+    // 【呼び出し側は必ず IllegalArgumentException を捕捉すること】
+    // UrlPathHelper は不正なパーセントエンコード（"%zz"、末尾の裸の "%" 等）に対して
+    // IllegalArgumentException("Invalid encoded sequence ...") を投げる。本フィルタは
+    // @Order(HIGHEST_PRECEDENCE) で Spring Security よりも DispatcherServlet よりも先に走るため、
+    // 例外をそのまま外へ出すと GlobalExceptionHandler に届かず、コンテナ既定の 500 になって
+    // {status, message} のエラー契約が壊れる（このクラスのコンストラクタが windowSeconds=0 に
+    // ついて警戒しているのと同じ壊れ方）。現行の組込 Tomcat はこの種の URI をコネクタ層で
+    // 400 にするため実害は出ていないが、コネクタ設定次第で表に出るためフィルタ内で完結させる。
+    private static String resolveApplicationPath(HttpServletRequest request) {
+        // Spring 標準の共有インスタンスでアプリ内パス（デコード済み・コンテキストパス除去済み）を求めて返す
+        return UrlPathHelper.defaultInstance.getPathWithinApplication(request);
     }
 
     // 指定時刻が属する固定ウィンドウが終わる（＝レート制限が解ける）までの残り秒数を返す。
