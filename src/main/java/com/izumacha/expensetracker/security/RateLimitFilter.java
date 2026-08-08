@@ -47,6 +47,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 // 1 リクエストにつき一度だけ実行されることを保証するフィルタ基底
 import org.springframework.web.filter.OncePerRequestFilter;
+// リクエストパスをデコードし、コンテキストパスを取り除くための Spring 標準ユーティリティ
+// （Spring Security / Spring MVC がパス照合に使うのと同じ正規化を再利用する）
+import org.springframework.web.util.UrlPathHelper;
 
 // 送信元 IP ごとに固定ウィンドウでリクエスト数を制限する簡易レート制限フィルタ（§9 公開エンドポイントを保護する）。
 // 外部ライブラリを足さず、メモリ使用も上限を設けて DoS（リソース枯渇）の起点を抑える。
@@ -241,9 +244,35 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // POST かつパスがトークン発行エンドポイントのときだけ重い扱いにする
         // （パスの定義は SecurityConfig 側の 1 箇所を参照する。§6 定数の一元管理）
         boolean isTokenRequest = HttpMethod.POST.matches(request.getMethod())
-                && SecurityConfig.TOKEN_ENDPOINT.equals(request.getRequestURI());
+                && SecurityConfig.TOKEN_ENDPOINT.equals(resolveApplicationPath(request));
         // トークン発行なら重い枠数（ただし capacity を超えない）、それ以外は 1 枠を返す
         return isTokenRequest ? Math.min(AUTH_ENDPOINT_REQUEST_COST, capacity) : DEFAULT_REQUEST_COST;
+    }
+
+    // リクエストパスを「アプリ内パス」（コンテキストパスを除き、パーセントエンコードを解いた形）で返す。
+    //
+    // 【なぜ getRequestURI() をそのまま使ってはいけないか】
+    // getRequestURI() は生（raw）の値で、(1) パーセントエンコードが解けておらず、
+    // (2) コンテキストパスのプレフィックスが付いたままになる。一方 Spring Security の
+    // requestMatchers(...) と Spring MVC のハンドラ照合は、どちらもデコード済み・
+    // コンテキストパス除去済みのパスで判定する。つまり生の値と定数を equals で比べると、
+    // 「Security と MVC はトークン発行エンドポイントだと判定して bcrypt 照合まで実行するのに、
+    // 本フィルタだけは別パスだと判定して重み付けを外す」という食い違いが起きる。
+    //
+    // 実際に確認された 2 つの抜け穴（いずれも回帰テストで固定している）:
+    //   (1) POST /api/auth/%74oken … "%74" は 't' のパーセントエンコード。StrictHttpFirewall は
+    //       これを通し、Security も MVC もデコードして /api/auth/token として扱うため 200 で
+    //       トークンが発行される。にもかかわらず生の値は定数と一致しないため消費枠が 1 になり、
+    //       総当たり対策の重み付け（12 枠）が丸ごと外れる（既定値なら 10 回/分 → 120 回/分）。
+    //   (2) server.servlet.context-path を設定した配備では getRequestURI() が
+    //       "<contextPath>/api/auth/token" になり、重み付けが常に外れる（設定変更だけで静かに壊れる）。
+    //
+    // UrlPathHelper は Spring MVC 自身がパス解決に使うユーティリティで、既定インスタンスは
+    // 「セミコロン内容の除去 → コンテキストパス除去 → URL デコード」を行う。照合相手と同じ
+    // 正規化を通すことで、上記の食い違いを原理的に無くす（自前でデコード処理を書かない。§6 再利用）。
+    private static String resolveApplicationPath(HttpServletRequest request) {
+        // Spring 標準の共有インスタンスでアプリ内パス（デコード済み・コンテキストパス除去済み）を求めて返す
+        return UrlPathHelper.defaultInstance.getPathWithinApplication(request);
     }
 
     // 指定時刻が属する固定ウィンドウが終わる（＝レート制限が解ける）までの残り秒数を返す。
