@@ -35,6 +35,8 @@ docker compose up --build        # PostgreSQL + アプリを一括起動（推�
 
 起動には次の環境変数が必要（未設定は fail-closed で起動失敗。`.env.example` 参照）: `SPRING_DATASOURCE_PASSWORD`（DB パスワード）/ `JWT_SECRET`（JWT 署名用シークレット・32 バイト以上）/ `API_USER_NAME`（API ユーザー名）/ `API_USER_PASSWORD_HASH`（パスワードの bcrypt ハッシュ。平文不可）。任意: `CORS_ALLOWED_ORIGINS`（許可オリジンのカンマ区切り。未設定なら全拒否）。
 
+スキーマ反映方針 `SPRING_JPA_HIBERNATE_DDL_AUTO` の既定は `validate`（DDL を発行せず、実スキーマとエンティティが食い違えば起動失敗＝本番で自動スキーマ変更を起こさない fail-safe）。**空の DB に対して `./mvnw spring-boot:run` を直接叩くときは `SPRING_JPA_HIBERNATE_DDL_AUTO=update` を明示する**（テーブルが無いまま `validate` で起動すると失敗する）。`docker compose` は app サービス側で `update` を指定済みなので設定不要。既定値は `DdlAutoDefaultTest` が固定している。
+
 ## 3. アーキテクチャ
 
 ### 層構成（`src/main/java/com/izumacha/expensetracker/`）
