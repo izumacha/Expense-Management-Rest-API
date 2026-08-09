@@ -293,6 +293,10 @@ export SPRING_DATASOURCE_PASSWORD=お好きなパスワード
 export JWT_SECRET=32文字以上のランダムな文字列
 export API_USER_NAME=お好きなユーザー名
 export API_USER_PASSWORD_HASH='パスワードの bcrypt ハッシュ（$2a$... で始まる）'
+# 空の DB から始める場合はテーブルを自動作成させる（既定の validate は DDL を発行しないため、
+# テーブルが無いまま起動すると「スキーマがエンティティと一致しない」と判断して起動に失敗する）。
+# 既にテーブルがある DB につなぐときや本番では、この行を外して既定の validate のままにする。
+export SPRING_JPA_HIBERNATE_DDL_AUTO=update
 # Maven のラッパー（同梱）で起動
 ./mvnw spring-boot:run
 ```
@@ -653,6 +657,11 @@ export SPRING_DATASOURCE_PASSWORD=a-password-of-your-choice
 export JWT_SECRET=a-random-string-of-32-bytes-or-more
 export API_USER_NAME=a-username-of-your-choice
 export API_USER_PASSWORD_HASH='bcrypt hash of the password (starts with $2a$...)'
+# Starting from an empty database? Let Hibernate create the tables. The default `validate`
+# emits no DDL, so starting against a database with no tables fails on purpose ("the schema
+# does not match the entities"). Drop this line — keeping the `validate` default — when you
+# point at a database that already has the schema, and in production.
+export SPRING_JPA_HIBERNATE_DDL_AUTO=update
 # Start via the bundled Maven wrapper
 ./mvnw spring-boot:run
 ```
