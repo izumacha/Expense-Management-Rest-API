@@ -39,7 +39,7 @@
 
 | # | 所見 | 現状 | 根拠 |
 |---|---|---|---|
-| 1.1 | 認証・認可が一切ない | **意図的スコープ外（未解消）** | `config/SecurityConfig.java` が `permitAll()` を維持しつつ、Javadoc で「MVP フェーズの明示的な設計判断」であることと本番移行時の対応手順（JWT/OAuth2・ロール認可・CORS・CSRF 再評価）を明記 |
+| 1.1 | 認証・認可が一切ない | **解消済み** | `config/SecurityConfig.java` が `anyRequest().authenticated()` を強制し、JWT（Resource Server 方式・HS256）を必須化。認証不要は `POST /api/auth/token`（＋ERROR ディスパッチ）のみ。`JwtConfig`（シークレット未設定/32 バイト未満で起動失敗）・`ApiUserConfig`（ユーザー名/bcrypt ハッシュ未設定・平文で起動失敗）・CORS 許可オリジンの明示リスト（未設定は全拒否・`*` は起動失敗）がいずれも fail-closed。`JwtAuthorizationTest` / `CorsPolicyTest` / `SecurityConfigValidationTest` で回帰テスト済み |
 | 1.2 | レート制限・サイズ上限・タイムアウトがない | **解消済み** | `security/RateLimitFilter.java`（IP 単位・ウィンドウ制限）、`RequestBodySizeLimitFilter`（本文サイズ上限＋413）、`application.yml` の `server.tomcat.connection-timeout`/`max-swallow-size` |
 | 1.3 | 一覧 API に上限・ページネーションがない | **解消済み** | `CategoryController`/`ExpenseController` が `Pageable` + `PageableSanitizer`（sort 固定・page 上限）を使用、`application.yml` の `spring.data.web.pageable.max-page-size: 100` |
 | 1.4 | 汎用例外ハンドラがない | **解消済み** | `GlobalExceptionHandler` が `Exception`/`DataAccessException`/`MissingServletRequestParameterException`/`MethodArgumentTypeMismatchException`/`NoHandlerFoundException` を含め網羅的に `{status, message}` へ整形 |
@@ -54,10 +54,15 @@
 | 2.5 | `@PastOrPresent` の TZ 依存 | **解消済み** | `config/TimeZoneConfig.java` が `@PostConstruct` で JVM 既定タイムゾーンを起動時に `Asia/Tokyo` へ固定し、`@PastOrPresent`（`Clock.systemDefaultZone()` 依存）がコンテナの実行環境 TZ に左右されないようにした。`TimeZoneConfigTest` で回帰テスト済み |
 | 2.6 | カテゴリ更新・削除 API 不在 | **解消済み** | `CategoryController` に `PUT /api/categories/{id}`・`DELETE /api/categories/{id}` を追加（使用中カテゴリの削除は `CategoryInUseException` で 409） |
 
-**再評価後の重大度サマリ**: 当初の「重大 3 件」のうち 2 件（Java テスト皆無・CI 未検証）は解消済みで、
-残る「認証・認可の欠如」は `SecurityConfig.java` に明記された意図的な MVP スコープ判断であり、
-本番移行前に必ず対応すべき唯一の残課題として位置付けを変更する。「高 4 件」はすべて解消済み。
-「中 4 件」は 3 件解消・1 件（`ddl-auto` 既定値）一部解消。「低 3 件」はすべて解消済み。
+**再評価後の重大度サマリ**: 当初の「重大 3 件」「高 4 件」「中 4 件」「低 3 件」は**すべて解消済み**。
+最後まで残っていた 2 件（1.1 認証・認可の欠如 / 2.3 `ddl-auto` 既定値）も後続 PR で解消した。
+なお 1.1 は本ドキュメントの前回更新（2026-07-19）時点では「意図的スコープ外」と記載していたが、
+その後 JWT 認証が実装され、記載が実装から取り残されていたため本追記で訂正している。
+
+> **本ドキュメントの位置付け（更新ルール）**: §1・§2 の本文は 2026-06-09 の分析時点の記録として
+> 書き換えず保持し、現状は上表のステータス欄だけを更新する。セキュリティ関連の実装
+> （認証・認可・レート制限・スキーマ管理方針）を変更したら、**同じ PR で上表の該当行も更新する**
+> こと（コードとドキュメントの乖離を許さない原則。共通規約 §3・§15）。
 
 ---
 
