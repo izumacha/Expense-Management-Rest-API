@@ -61,6 +61,11 @@ services:
       API_USER_PASSWORD_HASH: ${API_USER_PASSWORD_HASH:?API_USER_PASSWORD_HASH（bcrypt ハッシュ）を .env で設定してください}
       # ブラウザ呼び出しを許可するオリジンのカンマ区切り（任意。未設定なら全オリジン拒否＝fail-closed）
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      # スキーマ反映方針。アプリの既定は validate（DDL を発行しない fail-safe）だが、この
+      # compose はまっさらな DB ボリュームから `docker compose up --build` の 1 コマンドで
+      # 動く開発用スタックなので、テーブルを作れる update をここで明示的に上書きする。
+      # 本番でこの compose をそのまま使わないこと（自動 DDL が有効になるため）。
+      SPRING_JPA_HIBERNATE_DDL_AUTO: ${SPRING_JPA_HIBERNATE_DDL_AUTO:-update}
     # ホストへ待受ポートを公開する
     ports:
       # ホスト 8080 をコンテナ 8080 に割り当てる

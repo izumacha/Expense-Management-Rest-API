@@ -18,8 +18,15 @@ spring:
   jpa:
     # スキーマ管理（Flyway はスコープ外）
     hibernate:
-      # スキーマ反映方針（既定はローカル開発用の update。本番は環境変数で validate を指定し自動変更を禁止する）
-      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
+      # スキーマ反映方針。既定は validate（＝既存スキーマがエンティティ定義と一致するか検証するだけで、
+      # DDL を一切発行しない）。
+      # 既定を update にしない理由（fail-safe / §9）: update は Hibernate が起動時に本番 DB へ
+      # ALTER TABLE 等を自動発行する。エンティティを直したつもりの変更で列が黙って追加され、
+      # 逆にエンティティ側から消した列は残り続けるため、スキーマの実態が誰にも把握できなくなる。
+      # 設定を忘れた環境ほど危険側（自動変更あり）に倒れるのは fail-open なので、既定は
+      # 「何もしない・食い違えば起動を失敗させる」validate 側に倒し、スキーマを作りたい環境
+      # （ローカル開発の docker compose・Testcontainers）だけが明示的に上書きする。
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:validate}
     # Open Session In View を無効化する
     open-in-view: false
     # SQL の各種挙動

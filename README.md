@@ -308,7 +308,7 @@ export API_USER_PASSWORD_HASH='パスワードの bcrypt ハッシュ（$2a$... 
 | `CORS_ALLOWED_ORIGINS` | 任意 | 許可するオリジンのカンマ区切り（未設定ならブラウザからのクロスオリジン呼び出しをすべて拒否。`*` 不可） |
 | `SPRING_DATASOURCE_URL` | 任意 | 接続先（例：`jdbc:postgresql://localhost:5432/expensetracker`） |
 | `SPRING_DATASOURCE_USERNAME` | 任意 | ユーザー名（未設定なら `expensetracker`） |
-| `SPRING_JPA_HIBERNATE_DDL_AUTO` | 任意 | スキーマ反映方針。本番は `validate` 推奨（既定は開発用の `update`） |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | 任意 | スキーマ反映方針。既定は `validate`（DDL を発行せず、実スキーマとエンティティが食い違えば起動失敗）。スキーマを自動作成したい開発環境だけ `update` を指定する（`docker compose` は app サービス側で指定済み） |
 | `SPRING_JPA_SHOW_SQL` | 任意 | SQL ログ出力（既定 `false`。デバッグ時のみ `true`） |
 
 > パスワードは秘密情報です。コードや docker-compose に直接書かず、環境変数や `.env` で渡してください（`.env` はコミットしない）。本番では推測されにくい値を設定してください。
@@ -668,7 +668,7 @@ The connection and other settings can be overridden with these environment varia
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated allowed origins (unset rejects every cross-origin browser call; `*` not accepted) |
 | `SPRING_DATASOURCE_URL` | No | Connection target (e.g. `jdbc:postgresql://localhost:5432/expensetracker`) |
 | `SPRING_DATASOURCE_USERNAME` | No | Username (defaults to `expensetracker`) |
-| `SPRING_JPA_HIBERNATE_DDL_AUTO` | No | Schema strategy. Use `validate` in production (defaults to `update` for dev) |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | No | Schema strategy. Defaults to `validate` (emits no DDL; startup fails if the live schema and the entities disagree). Set `update` only in dev environments that need the schema created automatically (`docker compose` already sets it on the app service) |
 | `SPRING_JPA_SHOW_SQL` | No | SQL logging (defaults to `false`; set `true` only for debugging) |
 
 > The password is a secret. Don't hard-code it in source or docker-compose; pass it via an environment variable or `.env` (never commit `.env`). Use a hard-to-guess value in production.

@@ -49,7 +49,7 @@
 | 1.8 | DB ポートのホスト公開 | **解消済み** | `docker-compose.yml` の `db` サービスが `127.0.0.1:5432:5432`（ループバック限定）に変更済み |
 | 2.1 | Java 側テストが皆無 | **解消済み** | `expense-tracker/src/test/java` 配下に Controller/Service/Repository/Exception 各層のテストが多数追加され、`./mvnw test` で全パス |
 | 2.2 | CI が Java を未検証 | **解消済み** | `.github/workflows/ci.yml` に `java-build-test` ジョブ（`./mvnw -B verify`）が追加済み |
-| 2.3 | `ddl-auto: update` の運用使用 | **一部解消（既定値は据え置き）** | `application.yml` が `${SPRING_JPA_HIBERNATE_DDL_AUTO:update}` として環境変数で `validate` 等へ上書き可能にはなったが、既定値自体は引き続き `update` |
+| 2.3 | `ddl-auto: update` の運用使用 | **解消済み** | `application.yml` の既定値を `${SPRING_JPA_HIBERNATE_DDL_AUTO:validate}` へ変更し、設定を忘れた環境が自動 DDL 側（fail-open）に倒れないようにした。スキーマ作成が必要な環境だけが明示的に上書きする（`docker-compose.yml` の app サービスが `update`、Testcontainers の `AbstractRepositoryTest` が `create-drop`）。既定値は `DdlAutoDefaultTest` で固定 |
 | 2.4 | `amount` の上限検証がない | **解消済み** | `CreateExpenseRequest` に `@Digits(integer = 17, fraction = 2)` を追加 |
 | 2.5 | `@PastOrPresent` の TZ 依存 | **解消済み** | `config/TimeZoneConfig.java` が `@PostConstruct` で JVM 既定タイムゾーンを起動時に `Asia/Tokyo` へ固定し、`@PastOrPresent`（`Clock.systemDefaultZone()` 依存）がコンテナの実行環境 TZ に左右されないようにした。`TimeZoneConfigTest` で回帰テスト済み |
 | 2.6 | カテゴリ更新・削除 API 不在 | **解消済み** | `CategoryController` に `PUT /api/categories/{id}`・`DELETE /api/categories/{id}` を追加（使用中カテゴリの削除は `CategoryInUseException` で 409） |
