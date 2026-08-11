@@ -274,11 +274,69 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/expenses?month
 
 ---
 
+## 運用手順（ログの確認・DB バックアップ）
+
+`docker compose` で運用する場合の最低限のランブックです。
+
+### ログの確認・保全
+
+アプリのログ（エラー・レート制限の警告など）は**コンテナの標準出力**に出ます。専用の監査ログ機能（誰がいつ何を変更したかの記録テーブル）は未実装のため（下の「既知の制約」参照）、現状で追跡に使えるのはこのアプリログだけです。
+
+```bash
+docker compose logs -f app     # アプリログを追いかける
+docker compose logs -f db      # PostgreSQL のログを追いかける
+```
+
+コンテナログは既定では無制限に増える／コンテナ削除で消えるため、運用時は Docker のログローテーションを設定して保全します（`docker-compose.yml` の `app` サービスに追記する例）:
+
+```yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"   # 1 ファイルの上限
+        max-file: "5"     # 保持する世代数
+```
+
+### DB バックアップ（取得）
+
+DB の実体は名前付きボリューム `db-data` にあります。バックアップは `pg_dump` の**カスタム形式**（`-Fc`。圧縮され、`pg_restore` で部分復元も可能）で取得します。コンテナ内のローカル接続はパスワード入力なしで実行できます。
+
+```bash
+mkdir -p backup
+docker compose exec -T db pg_dump -U "${SPRING_DATASOURCE_USERNAME:-expensetracker}" -Fc expensetracker \
+  > "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump"
+```
+
+定期取得する場合の cron 例（毎日 3:00 に取得し、30 日より古い世代を削除）:
+
+```cron
+0 3 * * * cd /path/to/Expense-Management-Rest-API && docker compose exec -T db pg_dump -U expensetracker -Fc expensetracker > "backup/expensetracker_$(date +\%Y\%m\%d).dump" && find backup -name '*.dump' -mtime +30 -delete
+```
+
+バックアップファイルには支出データがそのまま含まれるため、リポジトリにコミットせず（`backup/` は gitignore 推奨）、保管先のアクセス権に注意してください。
+
+### DB リストア（復元）
+
+アプリを止めてから既存データを置き換える形で復元します。
+
+```bash
+docker compose stop app                     # 書き込みを止める
+docker compose exec -T db pg_restore -U "${SPRING_DATASOURCE_USERNAME:-expensetracker}" \
+  -d expensetracker --clean --if-exists --single-transaction \
+  < backup/expensetracker_YYYYMMDD_HHMMSS.dump
+docker compose start app                    # アプリを再開する
+```
+
+- `--clean --if-exists` は既存オブジェクトを削除してから作り直します（既存データは失われます）。
+- `--single-transaction` により、途中で失敗した場合は何も変更されません（中途半端な状態を防ぐ）。
+- **リストア手順は定期的にリハーサルしてください。** 復元できないバックアップは無いのと同じです。中身の一覧は `pg_restore --list <dump ファイル>` で確認できます。
+
 ## 既知の制約・今後の課題
 
 本リポジトリは MVP（最小構成）です。以下は**意図的に未実装**で、今後の課題として整理しています。
 
 - **マルチユーザー化・所有者単位のデータ分離**: 認証は JWT（`POST /api/auth/token` で発行）で全エンドポイントに導入済みですが、API ユーザーは環境変数で構成する **単一ユーザー** のみです。複数ユーザーの登録・所有者単位のデータ分離（どの支出が誰のものか）は未実装で、マルチユーザー公開の前に別途導入する必要があります。
+- **専用の監査ログ（audit log）**: 「誰が・いつ・どの支出を作成/更新/削除したか」を記録する監査テーブルは未実装です。現状はコンテナ標準出力のアプリログ（エラー・レート制限等）が唯一の手がかりで、上の「運用手順」のログローテーション設定で保全します。認証イベント（トークン発行の成功/失敗）の記録を含め、マルチユーザー化と合わせて導入予定です。
 
 ---
 
@@ -638,11 +696,69 @@ What the `status` number means:
 
 ---
 
+## Operations runbook (logs & database backup)
+
+A minimal runbook for running the app with `docker compose`.
+
+### Inspecting and retaining logs
+
+Application logs (errors, rate-limit warnings, etc.) go to the **container's standard output**. A dedicated audit log (a table recording who changed what and when) is not implemented (see "Known limitations" below), so these application logs are currently the only trail available.
+
+```bash
+docker compose logs -f app     # follow the application log
+docker compose logs -f db      # follow the PostgreSQL log
+```
+
+Container logs grow without bound by default and disappear when the container is removed, so configure Docker log rotation in production (example addition to the `app` service in `docker-compose.yml`):
+
+```yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"   # per-file cap
+        max-file: "5"     # number of rotated files to keep
+```
+
+### Taking a database backup
+
+The database lives in the named volume `db-data`. Take backups with `pg_dump` in **custom format** (`-Fc`: compressed, and `pg_restore` can restore selectively). Local connections inside the container require no password prompt.
+
+```bash
+mkdir -p backup
+docker compose exec -T db pg_dump -U "${SPRING_DATASOURCE_USERNAME:-expensetracker}" -Fc expensetracker \
+  > "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump"
+```
+
+Example cron entry (daily at 03:00, deleting generations older than 30 days):
+
+```cron
+0 3 * * * cd /path/to/Expense-Management-Rest-API && docker compose exec -T db pg_dump -U expensetracker -Fc expensetracker > "backup/expensetracker_$(date +\%Y\%m\%d).dump" && find backup -name '*.dump' -mtime +30 -delete
+```
+
+Backup files contain the raw expense data: do not commit them (gitignoring `backup/` is recommended) and control access to wherever they are stored.
+
+### Restoring the database
+
+Stop the app first, then restore over the existing data.
+
+```bash
+docker compose stop app                     # stop writes
+docker compose exec -T db pg_restore -U "${SPRING_DATASOURCE_USERNAME:-expensetracker}" \
+  -d expensetracker --clean --if-exists --single-transaction \
+  < backup/expensetracker_YYYYMMDD_HHMMSS.dump
+docker compose start app                    # resume the app
+```
+
+- `--clean --if-exists` drops and recreates existing objects (existing data is lost).
+- `--single-transaction` rolls everything back if the restore fails midway (no half-restored state).
+- **Rehearse the restore procedure regularly.** A backup you cannot restore is no backup at all. Inspect a dump's contents with `pg_restore --list <dump file>`.
+
 ## Known limitations / future work
 
 This repository is an MVP. The following are **intentionally not implemented** and tracked as future work.
 
 - **Multi-user support / per-owner data isolation**: JWT authentication (issued via `POST /api/auth/token`) now protects every endpoint, but the API user is a **single user** configured through environment variables. Registering multiple users and isolating data per owner (whose expense is whose) are not implemented, and must be added before a multi-user launch.
+- **Dedicated audit log**: There is no audit table recording who created/updated/deleted which expense and when. The container-stdout application log (errors, rate limiting, etc.) is currently the only trail; retain it with the log-rotation settings in the runbook above. Recording authentication events (token issuance success/failure) is planned together with multi-user support.
 
 ---
 
