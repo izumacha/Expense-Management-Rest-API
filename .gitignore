@@ -16,3 +16,6 @@ Thumbs.db
 # 環境変数ファイル（DB パスワード等の秘密情報を含むためコミットしない。雛形は .env.example）
 .env
 .env.local
+# DB バックアップ（支出データを含むためコミットしない。README の運用手順参照）
+backup/
+*.dump

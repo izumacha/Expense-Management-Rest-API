@@ -301,19 +301,21 @@ docker compose logs -f db      # PostgreSQL のログを追いかける
 
 DB の実体は名前付きボリューム `db-data` にあります。バックアップは `pg_dump` の**カスタム形式**（`-Fc`。圧縮され、`pg_restore` で部分復元も可能）で取得します。コンテナ内のローカル接続はパスワード入力なしで実行できます。
 
+DB ユーザー名はコンテナ内の環境変数 `POSTGRES_USER`（`.env` の `SPRING_DATASOURCE_USERNAME` 由来）から解決させます。ホストシェルで展開すると `.env` の値が反映されないため、シングルクォートのまま実行してください。
+
 ```bash
 mkdir -p backup
-docker compose exec -T db pg_dump -U "${SPRING_DATASOURCE_USERNAME:-expensetracker}" -Fc expensetracker \
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' \
   > "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump"
 ```
 
-定期取得する場合の cron 例（毎日 3:00 に取得し、30 日より古い世代を削除）:
+定期取得する場合の cron 例（毎日 3:00 に取得し、30 日より古い世代を削除）。途中失敗した空/不完全なファイルを正規のバックアップとして残さないよう、一時ファイルに書き出して**成功したときだけ** `mv` で確定します:
 
 ```cron
-0 3 * * * cd /path/to/Expense-Management-Rest-API && docker compose exec -T db pg_dump -U expensetracker -Fc expensetracker > "backup/expensetracker_$(date +\%Y\%m\%d).dump" && find backup -name '*.dump' -mtime +30 -delete
+0 3 * * * cd /path/to/Expense-Management-Rest-API && docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "backup/.tmp_$(date +\%Y\%m\%d).dump" && mv "backup/.tmp_$(date +\%Y\%m\%d).dump" "backup/expensetracker_$(date +\%Y\%m\%d).dump" && find backup -name 'expensetracker_*.dump' -mtime +30 -delete
 ```
 
-バックアップファイルには支出データがそのまま含まれるため、リポジトリにコミットせず（`backup/` は gitignore 推奨）、保管先のアクセス権に注意してください。
+バックアップファイルには支出データがそのまま含まれるため、リポジトリにコミットせず（`backup/` と `*.dump` は `.gitignore` 済み）、保管先のアクセス権に注意してください。
 
 ### DB リストア（復元）
 
@@ -321,11 +323,12 @@ docker compose exec -T db pg_dump -U "${SPRING_DATASOURCE_USERNAME:-expensetrack
 
 ```bash
 docker compose stop app                     # 書き込みを止める
-docker compose exec -T db pg_restore -U "${SPRING_DATASOURCE_USERNAME:-expensetracker}" \
-  -d expensetracker --clean --if-exists --single-transaction \
+docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d expensetracker --clean --if-exists --single-transaction' \
   < backup/expensetracker_YYYYMMDD_HHMMSS.dump
 docker compose start app                    # アプリを再開する
 ```
+
+（ファイル名は手動バックアップの `expensetracker_YYYYMMDD_HHMMSS.dump` 例。cron で取得した世代は時刻なしの `expensetracker_YYYYMMDD.dump` 形式なので読み替えてください。）
 
 - `--clean --if-exists` は既存オブジェクトを削除してから作り直します（既存データは失われます）。
 - `--single-transaction` により、途中で失敗した場合は何も変更されません（中途半端な状態を防ぐ）。
@@ -723,19 +726,21 @@ Container logs grow without bound by default and disappear when the container is
 
 The database lives in the named volume `db-data`. Take backups with `pg_dump` in **custom format** (`-Fc`: compressed, and `pg_restore` can restore selectively). Local connections inside the container require no password prompt.
 
+Resolve the database user from the container-side environment variable `POSTGRES_USER` (populated from `SPRING_DATASOURCE_USERNAME` in `.env`). Keep the single quotes: expanding the variable in the host shell would ignore the `.env` value.
+
 ```bash
 mkdir -p backup
-docker compose exec -T db pg_dump -U "${SPRING_DATASOURCE_USERNAME:-expensetracker}" -Fc expensetracker \
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' \
   > "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump"
 ```
 
-Example cron entry (daily at 03:00, deleting generations older than 30 days):
+Example cron entry (daily at 03:00, deleting generations older than 30 days). To avoid keeping an empty/truncated file as a "backup" when the dump fails midway, write to a temp file and `mv` it into place **only on success**:
 
 ```cron
-0 3 * * * cd /path/to/Expense-Management-Rest-API && docker compose exec -T db pg_dump -U expensetracker -Fc expensetracker > "backup/expensetracker_$(date +\%Y\%m\%d).dump" && find backup -name '*.dump' -mtime +30 -delete
+0 3 * * * cd /path/to/Expense-Management-Rest-API && docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "backup/.tmp_$(date +\%Y\%m\%d).dump" && mv "backup/.tmp_$(date +\%Y\%m\%d).dump" "backup/expensetracker_$(date +\%Y\%m\%d).dump" && find backup -name 'expensetracker_*.dump' -mtime +30 -delete
 ```
 
-Backup files contain the raw expense data: do not commit them (gitignoring `backup/` is recommended) and control access to wherever they are stored.
+Backup files contain the raw expense data: do not commit them (`backup/` and `*.dump` are gitignored) and control access to wherever they are stored.
 
 ### Restoring the database
 
@@ -743,11 +748,12 @@ Stop the app first, then restore over the existing data.
 
 ```bash
 docker compose stop app                     # stop writes
-docker compose exec -T db pg_restore -U "${SPRING_DATASOURCE_USERNAME:-expensetracker}" \
-  -d expensetracker --clean --if-exists --single-transaction \
+docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d expensetracker --clean --if-exists --single-transaction' \
   < backup/expensetracker_YYYYMMDD_HHMMSS.dump
 docker compose start app                    # resume the app
 ```
+
+(The filename shows the manual-backup naming `expensetracker_YYYYMMDD_HHMMSS.dump`; generations taken by the cron job use the time-less `expensetracker_YYYYMMDD.dump` form.)
 
 - `--clean --if-exists` drops and recreates existing objects (existing data is lost).
 - `--single-transaction` rolls everything back if the restore fails midway (no half-restored state).
