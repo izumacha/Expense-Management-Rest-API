@@ -287,7 +287,7 @@ docker compose logs -f app     # アプリログを追いかける
 docker compose logs -f db      # PostgreSQL のログを追いかける
 ```
 
-コンテナログは既定では無制限に増える／コンテナ削除で消えるため、運用時は Docker のログローテーションを設定して保全します（`docker-compose.yml` の `app` サービスに追記する例）:
+コンテナログは既定では無制限に増えるため、まずディスクを溢れさせないようローテーションを設定します（`docker-compose.yml` の `app` サービスに追記する例）:
 
 ```yaml
     logging:
@@ -295,6 +295,22 @@ docker compose logs -f db      # PostgreSQL のログを追いかける
       options:
         max-size: "10m"   # 1 ファイルの上限
         max-file: "5"     # 保持する世代数
+```
+
+**この設定はディスク保護であって、ログの保全ではありません。** 上限（この例では合計 50MB）を超えた分は古いものから削除され、`docker compose down` でコンテナごと消えます。認証失敗が連続して警告が大量に出た直後などは、必要な記録が上限に押し出されて失われます。ログを追跡目的で残すなら、コンテナの外に転送してください:
+
+```yaml
+    logging:
+      driver: syslog          # ホストの syslog/journald へ転送して永続化する
+      options:
+        tag: "expense-tracker-app"
+```
+
+転送先を用意できない場合は、定期的にファイルへ書き出す簡易な方法もあります（ローテーションで消える前に回収する必要があるため、間隔は上限に届かない範囲にします）:
+
+```bash
+mkdir -p logs
+docker compose logs --no-color --timestamps app >> "logs/app_$(date +%Y%m%d).log"
 ```
 
 ### DB バックアップ（取得）
@@ -309,13 +325,19 @@ docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker'
   > "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump"
 ```
 
-定期取得する場合の cron 例（毎日 3:00 に取得し、30 日より古い世代を削除）。途中失敗した空/不完全なファイルを正規のバックアップとして残さないよう、一時ファイルに書き出して**成功したときだけ** `mv` で確定します:
+定期取得する場合の cron 例（毎日 3:00 に取得し、30 日より古い**自動取得分だけ**を削除）。ポイントは 3 つあります:
+
+- 途中失敗した空/不完全なファイルを正規のバックアップとして残さないよう、一時ファイルに書き出して**成功したときだけ** `mv` で確定する
+- 自動取得分は `daily_` を付けて手動バックアップと名前空間を分け、削除対象を `daily_` に限定する（同じ命名にすると、アップグレード前に取っておいた手動スナップショットまで 30 日後に消えます）
+- 失敗した一時ファイルはその場で片付ける（放置すると隠しファイルとして毎日積み上がり、`ls` に見えないままディスクを埋めます）
 
 ```cron
-0 3 * * * cd /path/to/Expense-Management-Rest-API && docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "backup/.tmp_$(date +\%Y\%m\%d).dump" && mv "backup/.tmp_$(date +\%Y\%m\%d).dump" "backup/expensetracker_$(date +\%Y\%m\%d).dump" && find backup -name 'expensetracker_*.dump' -mtime +30 -delete
+0 3 * * * cd /path/to/Expense-Management-Rest-API && mkdir -p backup && T="backup/.tmp_daily.dump" && { docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" && mv "$T" "backup/daily_$(date +\%Y\%m\%d).dump" && find backup -name 'daily_*.dump' -mtime +30 -delete; } || { rm -f "$T"; echo "backup failed" >&2; exit 1; }
 ```
 
-バックアップファイルには支出データがそのまま含まれるため、リポジトリにコミットせず（`backup/` と `*.dump` は `.gitignore` 済み）、保管先のアクセス権に注意してください。
+cron はエラーを画面に出さないため、**失敗に気づける経路を必ず用意してください**（crontab の `MAILTO=` を設定する、監視サービスへ通知する、`backup/` の最新更新時刻を監視する、など）。復元が必要になった時点で「実は毎晩失敗していた」と判明するのが最悪のケースです。`docker` が cron の PATH に無い場合もあるため、初回はコマンドを手で実行して確認します。
+
+バックアップファイルには支出データがそのまま含まれるため、リポジトリにコミットせず（`backup/` は `.gitignore` 済み）、保管先のアクセス権に注意してください。また、`backup/` は DB ボリューム `db-data` と**同じホスト上**にあります。この状態ではディスク故障や誤操作で DB とバックアップを同時に失うため、取得した dump は別のストレージ（別ホスト・オブジェクトストレージ等）へ複製してください。
 
 ### DB リストア（復元）
 
@@ -328,10 +350,11 @@ docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d expensetracke
 docker compose start app                    # アプリを再開する
 ```
 
-（ファイル名は手動バックアップの `expensetracker_YYYYMMDD_HHMMSS.dump` 例。cron で取得した世代は時刻なしの `expensetracker_YYYYMMDD.dump` 形式なので読み替えてください。）
+（ファイル名は手動バックアップの `expensetracker_YYYYMMDD_HHMMSS.dump` 例。cron で取得した世代は `daily_YYYYMMDD.dump` 形式なので読み替えてください。）
 
 - `--clean --if-exists` は既存オブジェクトを削除してから作り直します（既存データは失われます）。
 - `--single-transaction` により、途中で失敗した場合は何も変更されません（中途半端な状態を防ぐ）。
+- **dump は、復元先で動かすアプリのバージョンと揃えてください。** スキーマ反映方針 `SPRING_JPA_HIBERNATE_DDL_AUTO` は `docker compose` では `update` です。古い dump を戻してからアプリを起動すると、Hibernate が復元直後のスキーマを勝手に変更します（`validate` 運用の場合は代わりに起動が失敗します）。アプリを更新したら、その版で取り直した dump を保持してください。
 - **リストア手順は定期的にリハーサルしてください。** 復元できないバックアップは無いのと同じです。中身の一覧は `pg_restore --list <dump ファイル>` で確認できます。
 
 ## 既知の制約・今後の課題
@@ -339,7 +362,7 @@ docker compose start app                    # アプリを再開する
 本リポジトリは MVP（最小構成）です。以下は**意図的に未実装**で、今後の課題として整理しています。
 
 - **マルチユーザー化・所有者単位のデータ分離**: 認証は JWT（`POST /api/auth/token` で発行）で全エンドポイントに導入済みですが、API ユーザーは環境変数で構成する **単一ユーザー** のみです。複数ユーザーの登録・所有者単位のデータ分離（どの支出が誰のものか）は未実装で、マルチユーザー公開の前に別途導入する必要があります。
-- **専用の監査ログ（audit log）**: 「誰が・いつ・どの支出を作成/更新/削除したか」を記録する監査テーブルは未実装です。現状はコンテナ標準出力のアプリログ（エラー・レート制限等）が唯一の手がかりで、上の「運用手順」のログローテーション設定で保全します。認証イベント（トークン発行の成功/失敗）の記録を含め、マルチユーザー化と合わせて導入予定です。
+- **専用の監査ログ（audit log）**: 「誰が・いつ・どの支出を作成/更新/削除したか」を記録する監査テーブルは未実装です。現状はコンテナ標準出力のアプリログ（エラー・レート制限等）が唯一の手がかりで、これは追跡用途としては不十分です（上の「運用手順」のとおり、ローテーションはディスク保護であって保全ではなく、コンテナ削除で消えます）。認証イベント（トークン発行の成功/失敗）の記録を含め、マルチユーザー化と合わせて導入予定です。詳細は `docs/issue-analysis.md` を参照してください。
 
 ---
 
@@ -712,7 +735,7 @@ docker compose logs -f app     # follow the application log
 docker compose logs -f db      # follow the PostgreSQL log
 ```
 
-Container logs grow without bound by default and disappear when the container is removed, so configure Docker log rotation in production (example addition to the `app` service in `docker-compose.yml`):
+Container logs grow without bound by default, so start by configuring rotation to protect the disk (example addition to the `app` service in `docker-compose.yml`):
 
 ```yaml
     logging:
@@ -720,6 +743,22 @@ Container logs grow without bound by default and disappear when the container is
       options:
         max-size: "10m"   # per-file cap
         max-file: "5"     # number of rotated files to keep
+```
+
+**This protects the disk; it does not retain the logs.** Anything beyond the cap (50MB in this example) is deleted oldest-first, and `docker compose down` removes all of it with the container. A burst of authentication failures can therefore push the very records you need out of the window. To keep logs for tracing, ship them off the container:
+
+```yaml
+    logging:
+      driver: syslog          # forward to the host's syslog/journald so entries persist
+      options:
+        tag: "expense-tracker-app"
+```
+
+If no forwarding target is available, periodically dump them to a file instead (run it often enough that entries are collected before rotation discards them):
+
+```bash
+mkdir -p logs
+docker compose logs --no-color --timestamps app >> "logs/app_$(date +%Y%m%d).log"
 ```
 
 ### Taking a database backup
@@ -734,13 +773,19 @@ docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker'
   > "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump"
 ```
 
-Example cron entry (daily at 03:00, deleting generations older than 30 days). To avoid keeping an empty/truncated file as a "backup" when the dump fails midway, write to a temp file and `mv` it into place **only on success**:
+Example cron entry (daily at 03:00, deleting **only automated** generations older than 30 days). Three things matter here:
+
+- To avoid keeping an empty/truncated file as a "backup" when the dump fails midway, write to a temp file and `mv` it into place **only on success**.
+- Automated dumps get a `daily_` prefix so they occupy a different namespace from manual ones, and the deletion is scoped to `daily_`. Sharing one naming scheme would silently delete the manual pre-upgrade snapshot you meant to keep, 30 days later.
+- Clean up the temp file when the dump fails; left behind, these hidden files accumulate daily and fill the disk without ever showing up in `ls`.
 
 ```cron
-0 3 * * * cd /path/to/Expense-Management-Rest-API && docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "backup/.tmp_$(date +\%Y\%m\%d).dump" && mv "backup/.tmp_$(date +\%Y\%m\%d).dump" "backup/expensetracker_$(date +\%Y\%m\%d).dump" && find backup -name 'expensetracker_*.dump' -mtime +30 -delete
+0 3 * * * cd /path/to/Expense-Management-Rest-API && mkdir -p backup && T="backup/.tmp_daily.dump" && { docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" && mv "$T" "backup/daily_$(date +\%Y\%m\%d).dump" && find backup -name 'daily_*.dump' -mtime +30 -delete; } || { rm -f "$T"; echo "backup failed" >&2; exit 1; }
 ```
 
-Backup files contain the raw expense data: do not commit them (`backup/` and `*.dump` are gitignored) and control access to wherever they are stored.
+cron reports nothing to your screen, so **make sure failures can reach you**: set `MAILTO=` in the crontab, notify a monitoring service, or alert on the last-modified time of `backup/`. The worst outcome is discovering at restore time that the job had been failing every night. `docker` may also be missing from cron's minimal PATH, so run the command by hand once to confirm.
+
+Backup files contain the raw expense data: do not commit them (`backup/` is gitignored) and control access to wherever they are stored. Note also that `backup/` sits on the **same host** as the `db-data` volume — a disk failure or a stray delete would take the database and every backup at once, so copy the dumps to separate storage (another host, object storage, etc.).
 
 ### Restoring the database
 
@@ -753,10 +798,11 @@ docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d expensetracke
 docker compose start app                    # resume the app
 ```
 
-(The filename shows the manual-backup naming `expensetracker_YYYYMMDD_HHMMSS.dump`; generations taken by the cron job use the time-less `expensetracker_YYYYMMDD.dump` form.)
+(The filename shows the manual-backup naming `expensetracker_YYYYMMDD_HHMMSS.dump`; generations taken by the cron job use the `daily_YYYYMMDD.dump` form.)
 
 - `--clean --if-exists` drops and recreates existing objects (existing data is lost).
 - `--single-transaction` rolls everything back if the restore fails midway (no half-restored state).
+- **Match the dump to the application version you will run against it.** `SPRING_JPA_HIBERNATE_DDL_AUTO` is `update` under `docker compose`, so starting the app after restoring an older dump lets Hibernate alter the schema you just restored (under a `validate` setup the app fails to start instead). After upgrading the application, keep a fresh dump taken with that version.
 - **Rehearse the restore procedure regularly.** A backup you cannot restore is no backup at all. Inspect a dump's contents with `pg_restore --list <dump file>`.
 
 ## Known limitations / future work
@@ -764,7 +810,7 @@ docker compose start app                    # resume the app
 This repository is an MVP. The following are **intentionally not implemented** and tracked as future work.
 
 - **Multi-user support / per-owner data isolation**: JWT authentication (issued via `POST /api/auth/token`) now protects every endpoint, but the API user is a **single user** configured through environment variables. Registering multiple users and isolating data per owner (whose expense is whose) are not implemented, and must be added before a multi-user launch.
-- **Dedicated audit log**: There is no audit table recording who created/updated/deleted which expense and when. The container-stdout application log (errors, rate limiting, etc.) is currently the only trail; retain it with the log-rotation settings in the runbook above. Recording authentication events (token issuance success/failure) is planned together with multi-user support.
+- **Dedicated audit log**: There is no audit table recording who created/updated/deleted which expense and when. The container-stdout application log (errors, rate limiting, etc.) is currently the only trail, and it is not sufficient for tracing — as the runbook above notes, rotation protects the disk rather than retaining entries, and the logs vanish with the container. Recording authentication events (token issuance success/failure) is planned together with multi-user support. See `docs/issue-analysis.md` for details.
 
 ---
 

@@ -53,6 +53,7 @@
 | 2.4 | `amount` の上限検証がない | **解消済み** | `CreateExpenseRequest` に `@Digits(integer = 17, fraction = 2)` を追加 |
 | 2.5 | `@PastOrPresent` の TZ 依存 | **解消済み** | `config/TimeZoneConfig.java` が `@PostConstruct` で JVM 既定タイムゾーンを起動時に `Asia/Tokyo` へ固定し、`@PastOrPresent`（`Clock.systemDefaultZone()` 依存）がコンテナの実行環境 TZ に左右されないようにした。`TimeZoneConfigTest` で回帰テスト済み |
 | 2.6 | カテゴリ更新・削除 API 不在 | **解消済み** | `CategoryController` に `PUT /api/categories/{id}`・`DELETE /api/categories/{id}` を追加（使用中カテゴリの削除は `CategoryInUseException` で 409） |
+| A.1 | 専用の監査ログがない（2026-08-12 追加所見） | **未対応** | 監査テーブルが無く、`docker compose` のコンテナ標準出力ログが唯一の追跡手段。詳細は下記「追加所見」を参照 |
 
 **再評価後の重大度サマリ**: 当初の「重大 3 件」「高 4 件」「中 4 件」「低 3 件」は**すべて解消済み**。
 最後まで残っていた 2 件（1.1 認証・認可の欠如 / 2.3 `ddl-auto` 既定値）も後続 PR で解消した。
@@ -182,6 +183,32 @@
 - 根拠: `controller/CategoryController.java`（作成・一覧のみ）。
 - 問題: カテゴリ名の修正や不要カテゴリの整理ができない。使用中カテゴリ削除時の支出の扱い（参照整合）も未設計。
 - 備考: MVP の意図的なスコープ判断の可能性あり。**要確認**事項として記載。実装する場合は支出が紐づくカテゴリの削除可否（禁止 or カスケード）を定義する。
+
+---
+
+## 追加所見（2026-08-12 追記）
+
+> 2026-06-09 の当初分析より後に見つかった課題をここに追記する。§1・§2 の本文は当時の記録として
+> 凍結しているため、後日の所見は原文に混ぜずこの節へ積み、上のステータス表にも 1 行追加する。
+
+### A.1【中】専用の監査ログ（audit log）がない
+
+- 根拠: `src/main/java/com/izumacha/expensetracker/` 配下に監査用のエンティティ・リポジトリ・
+  インターセプタが存在しない。`ExpenseService` / `CategoryService` は変更内容を記録せず永続化する。
+- 問題: 「誰が・いつ・どの支出を作成/更新/削除したか」を後から追えない。認証イベント
+  （`POST /api/auth/token` の成功/失敗）も記録されないため、資格情報の総当たりを検知・立証できない。
+  現状の代替手段はコンテナ標準出力のアプリログだけだが、これは追跡には不十分である
+  （json-file のローテーションは上限超過分を捨てるディスク保護であり、`docker compose down` で
+  コンテナごと消える。README の「運用手順」に明記）。
+- 影響範囲: 単一 API ユーザーの MVP では実害が限定的だが、マルチユーザー化（1.1 の残課題）と同時に
+  必要になる。金額データを扱う以上、変更履歴の説明責任は運用要件になり得る。
+- 対応案: 変更を記録する監査テーブルを設け、サービス層ではなく永続化フック
+  （Hibernate のイベントリスナ / Spring Data の監査機能）に寄せて記録漏れを防ぐ。認証イベントは
+  Spring Security の `AuthenticationSuccessEvent` / `AuthenticationFailureBadCredentialsEvent` を購読する。
+  記録先はアプリログではなく DB とし、失敗時もアプリを停止させない（fail-open で機能を縮退）か、
+  監査必須の要件なら fail-closed にするかを先に決める。ログ・監査記録にパスワードやトークンを
+  含めないこと（共通規約 §9）。
+- 関連: README「既知の制約・今後の課題」の該当項目。
 
 ---
 
