@@ -287,7 +287,9 @@ docker compose logs -f app     # アプリログを追いかける
 docker compose logs -f db      # PostgreSQL のログを追いかける
 ```
 
-コンテナログは既定では無制限に増えるため、まずディスクを溢れさせないようローテーションを設定します（`docker-compose.yml` の `app` サービスに追記する例）:
+まず注意点として、**認証の成否はログに一切残りません。** トークン発行の失敗は 401 を返すだけでログ出力を伴わず（`GlobalExceptionHandler#handleAuthenticationFailure`）、成功時も同様です。したがって `POST /api/auth/token` への総当たり攻撃はアプリログでは検知も立証もできません（下の「既知の制約」の監査ログ項目）。現在アプリログに出るのは主にサーバエラー（5xx）と、追跡クライアント数が上限に達したときのレート制限の警告です。
+
+コンテナログは既定では無制限に増えるため、まずディスクを溢れさせないようローテーションを設定します。**ローテーションはサービスごとの設定なので、`app` だけでなく `db` にも同じブロックを入れてください**（PostgreSQL は接続失敗やエラーを都度記録するため、放置するとホストのディスクを埋めて DB ごと停止します）:
 
 ```yaml
     logging:
@@ -297,20 +299,21 @@ docker compose logs -f db      # PostgreSQL のログを追いかける
         max-file: "5"     # 保持する世代数
 ```
 
-**この設定はディスク保護であって、ログの保全ではありません。** 上限（この例では合計 50MB）を超えた分は古いものから削除され、`docker compose down` でコンテナごと消えます。認証失敗が連続して警告が大量に出た直後などは、必要な記録が上限に押し出されて失われます。ログを追跡目的で残すなら、コンテナの外に転送してください:
+**この設定はディスク保護であって、ログの保全ではありません。** 上限（この例では合計 50MB）を超えた分は古いものから削除され、`docker compose down` でコンテナごと消えます。ログを追跡目的で残すなら、コンテナの外へ転送してください:
 
 ```yaml
     logging:
-      driver: syslog          # ホストの syslog/journald へ転送して永続化する
-      options:
-        tag: "expense-tracker-app"
+      driver: journald        # ホストの journald へ転送して永続化する
 ```
 
-転送先を用意できない場合は、定期的にファイルへ書き出す簡易な方法もあります（ローテーションで消える前に回収する必要があるため、間隔は上限に届かない範囲にします）:
+> **ログドライバを変えるときの注意**: `docker compose logs` で読み戻せるのは `json-file` / `local` / `journald` だけです。`syslog` などに変えると、上に挙げた `docker compose logs -f app` も下のファイル書き出しも「configured logging driver does not support reading logs」で失敗します。また `syslog` ドライバは既定でホストの `/dev/log` へ接続するため、syslog デーモンが動いていないホストでは**コンテナの起動自体が失敗**します。読み戻しを残したいなら `journald` を選んでください。
+
+転送先を用意できない場合は、定期的にファイルへ書き出す簡易な方法もあります。`docker compose logs` は毎回**保持しているログの先頭から**出力するため、`--since` で前回実行以降に絞らないと同じ内容を何度も追記してしまいます（実行間隔と `--since` の値を必ず揃えてください）:
 
 ```bash
 mkdir -p logs
-docker compose logs --no-color --timestamps app >> "logs/app_$(date +%Y%m%d).log"
+# 1 時間ごとに実行する場合の例（--since も 60m に揃える）
+docker compose logs --no-color --timestamps --since 60m app >> "logs/app_$(date +%Y%m%d).log"
 ```
 
 ### DB バックアップ（取得）
@@ -319,20 +322,25 @@ DB の実体は名前付きボリューム `db-data` にあります。バック
 
 DB ユーザー名はコンテナ内の環境変数 `POSTGRES_USER`（`.env` の `SPRING_DATASOURCE_USERNAME` 由来）から解決させます。ホストシェルで展開すると `.env` の値が反映されないため、シングルクォートのまま実行してください。
 
+リダイレクト先を直接バックアップ名にすると、`pg_dump` が失敗しても**シェルが先に出力ファイルを作ってしまう**ため、0 バイトや中途半端なファイルが正規のバックアップとして残ります。一時ファイルへ書き出し、成功したときだけ `mv` で確定してください:
+
 ```bash
 mkdir -p backup
-docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' \
-  > "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump"
+T="backup/.tmp_manual.dump"
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" \
+  && mv "$T" "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump" \
+  || { rm -f "$T"; echo "バックアップに失敗しました" >&2; }
 ```
 
-定期取得する場合の cron 例（毎日 3:00 に取得し、30 日より古い**自動取得分だけ**を削除）。ポイントは 3 つあります:
+定期取得する場合の cron 例（毎日 3:00 に取得し、30 日より古い**自動取得分だけ**を別ジョブで削除）。ポイントは 3 つあります:
 
-- 途中失敗した空/不完全なファイルを正規のバックアップとして残さないよう、一時ファイルに書き出して**成功したときだけ** `mv` で確定する
+- 上と同じ理由で一時ファイルに書き出し、**成功したときだけ** `mv` で確定する。失敗した一時ファイルはその場で片付ける（放置すると隠しファイルとして毎日積み上がり、`ls` に見えないままディスクを埋めます）
 - 自動取得分は `daily_` を付けて手動バックアップと名前空間を分け、削除対象を `daily_` に限定する（同じ命名にすると、アップグレード前に取っておいた手動スナップショットまで 30 日後に消えます）
-- 失敗した一時ファイルはその場で片付ける（放置すると隠しファイルとして毎日積み上がり、`ls` に見えないままディスクを埋めます）
+- 世代削除（`find`）は取得ジョブと分ける。同じ `&&` 連鎖に入れると、バックアップは正常に取れているのに古いファイルの削除に失敗しただけで「失敗」と通知されます。誤報が続くと、本当に失敗した晩の通知を見逃す原因になります
 
 ```cron
-0 3 * * * cd /path/to/Expense-Management-Rest-API && mkdir -p backup && T="backup/.tmp_daily.dump" && { docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" && mv "$T" "backup/daily_$(date +\%Y\%m\%d).dump" && find backup -name 'daily_*.dump' -mtime +30 -delete; } || { rm -f "$T"; echo "backup failed" >&2; exit 1; }
+0 3 * * * cd /path/to/Expense-Management-Rest-API && mkdir -p backup && T="backup/.tmp_daily.dump" && { docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" && mv "$T" "backup/daily_$(date +\%Y\%m\%d).dump"; } || { rm -f "$T"; echo "backup failed" >&2; exit 1; }
+5 3 * * * cd /path/to/Expense-Management-Rest-API && find backup -name 'daily_*.dump' -mtime +30 -delete
 ```
 
 cron はエラーを画面に出さないため、**失敗に気づける経路を必ず用意してください**（crontab の `MAILTO=` を設定する、監視サービスへ通知する、`backup/` の最新更新時刻を監視する、など）。復元が必要になった時点で「実は毎晩失敗していた」と判明するのが最悪のケースです。`docker` が cron の PATH に無い場合もあるため、初回はコマンドを手で実行して確認します。
@@ -355,7 +363,11 @@ docker compose start app                    # アプリを再開する
 - `--clean --if-exists` は既存オブジェクトを削除してから作り直します（既存データは失われます）。
 - `--single-transaction` により、途中で失敗した場合は何も変更されません（中途半端な状態を防ぐ）。
 - **dump は、復元先で動かすアプリのバージョンと揃えてください。** スキーマ反映方針 `SPRING_JPA_HIBERNATE_DDL_AUTO` は `docker compose` では `update` です。古い dump を戻してからアプリを起動すると、Hibernate が復元直後のスキーマを勝手に変更します（`validate` 運用の場合は代わりに起動が失敗します）。アプリを更新したら、その版で取り直した dump を保持してください。
-- **リストア手順は定期的にリハーサルしてください。** 復元できないバックアップは無いのと同じです。中身の一覧は `pg_restore --list <dump ファイル>` で確認できます。
+- **リストア手順は定期的にリハーサルしてください。** 復元できないバックアップは無いのと同じです。中身の一覧は次のコマンドで確認できます（`pg_restore` はコンテナ内にしかないため、ホストで直接実行しても `command not found` になります）:
+
+  ```bash
+  docker compose exec -T db pg_restore --list < backup/daily_YYYYMMDD.dump
+  ```
 
 ## 既知の制約・今後の課題
 
@@ -735,7 +747,9 @@ docker compose logs -f app     # follow the application log
 docker compose logs -f db      # follow the PostgreSQL log
 ```
 
-Container logs grow without bound by default, so start by configuring rotation to protect the disk (example addition to the `app` service in `docker-compose.yml`):
+Note first that **authentication outcomes are never logged.** A failed token request returns 401 without emitting a log line (`GlobalExceptionHandler#handleAuthenticationFailure`), and successes are equally silent. A brute-force run against `POST /api/auth/token` therefore cannot be detected or evidenced from the application log (see the audit-log item under "Known limitations"). What does reach the log today is mainly server errors (5xx) and a rate-limit warning when the tracked-client cap is hit.
+
+Container logs grow without bound by default, so start by configuring rotation to protect the disk. **Rotation is per-service, so apply the same block to `db` as well as `app`** — PostgreSQL records every failed connection and error, and left unbounded it will fill the host disk and take the database down with it:
 
 ```yaml
     logging:
@@ -745,20 +759,21 @@ Container logs grow without bound by default, so start by configuring rotation t
         max-file: "5"     # number of rotated files to keep
 ```
 
-**This protects the disk; it does not retain the logs.** Anything beyond the cap (50MB in this example) is deleted oldest-first, and `docker compose down` removes all of it with the container. A burst of authentication failures can therefore push the very records you need out of the window. To keep logs for tracing, ship them off the container:
+**This protects the disk; it does not retain the logs.** Anything beyond the cap (50MB in this example) is deleted oldest-first, and `docker compose down` removes all of it with the container. To keep logs for tracing, ship them off the container:
 
 ```yaml
     logging:
-      driver: syslog          # forward to the host's syslog/journald so entries persist
-      options:
-        tag: "expense-tracker-app"
+      driver: journald        # forward to the host's journald so entries persist
 ```
 
-If no forwarding target is available, periodically dump them to a file instead (run it often enough that entries are collected before rotation discards them):
+> **Before changing the logging driver**: only `json-file`, `local`, and `journald` can be read back with `docker compose logs`. Switching to `syslog` or similar makes both `docker compose logs -f app` above and the file collection below fail with "configured logging driver does not support reading logs". The `syslog` driver also connects to the host's `/dev/log` by default, so on a host with no syslog daemon listening **the container fails to start at all**. Choose `journald` if you want to keep read-back.
+
+If no forwarding target is available, periodically dump them to a file instead. `docker compose logs` always prints from the beginning of the retained buffer, so without `--since` each run re-appends everything you already collected — keep the interval and the `--since` value in sync:
 
 ```bash
 mkdir -p logs
-docker compose logs --no-color --timestamps app >> "logs/app_$(date +%Y%m%d).log"
+# Example for running hourly (keep --since matched to the interval)
+docker compose logs --no-color --timestamps --since 60m app >> "logs/app_$(date +%Y%m%d).log"
 ```
 
 ### Taking a database backup
@@ -767,20 +782,25 @@ The database lives in the named volume `db-data`. Take backups with `pg_dump` in
 
 Resolve the database user from the container-side environment variable `POSTGRES_USER` (populated from `SPRING_DATASOURCE_USERNAME` in `.env`). Keep the single quotes: expanding the variable in the host shell would ignore the `.env` value.
 
+Redirecting straight to the final backup name is unsafe: the shell creates the output file before `pg_dump` runs, so a failed dump leaves a 0-byte or truncated file that looks like a valid backup. Write to a temp file and `mv` it into place only on success:
+
 ```bash
 mkdir -p backup
-docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' \
-  > "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump"
+T="backup/.tmp_manual.dump"
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" \
+  && mv "$T" "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump" \
+  || { rm -f "$T"; echo "backup failed" >&2; }
 ```
 
-Example cron entry (daily at 03:00, deleting **only automated** generations older than 30 days). Three things matter here:
+Example cron entries (daily at 03:00, with **only automated** generations older than 30 days pruned by a separate job). Three things matter here:
 
-- To avoid keeping an empty/truncated file as a "backup" when the dump fails midway, write to a temp file and `mv` it into place **only on success**.
+- Write to a temp file and `mv` it into place **only on success**, for the same reason as above. Clean up the temp file when the dump fails; left behind, these hidden files accumulate daily and fill the disk without ever showing up in `ls`.
 - Automated dumps get a `daily_` prefix so they occupy a different namespace from manual ones, and the deletion is scoped to `daily_`. Sharing one naming scheme would silently delete the manual pre-upgrade snapshot you meant to keep, 30 days later.
-- Clean up the temp file when the dump fails; left behind, these hidden files accumulate daily and fill the disk without ever showing up in `ls`.
+- Keep the retention `find` out of the backup job. Chained with `&&`, a failure to delete an old file reports the whole run as failed even though the backup was taken correctly — and recurring false alarms are how the one genuine failure gets ignored.
 
 ```cron
-0 3 * * * cd /path/to/Expense-Management-Rest-API && mkdir -p backup && T="backup/.tmp_daily.dump" && { docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" && mv "$T" "backup/daily_$(date +\%Y\%m\%d).dump" && find backup -name 'daily_*.dump' -mtime +30 -delete; } || { rm -f "$T"; echo "backup failed" >&2; exit 1; }
+0 3 * * * cd /path/to/Expense-Management-Rest-API && mkdir -p backup && T="backup/.tmp_daily.dump" && { docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" && mv "$T" "backup/daily_$(date +\%Y\%m\%d).dump"; } || { rm -f "$T"; echo "backup failed" >&2; exit 1; }
+5 3 * * * cd /path/to/Expense-Management-Rest-API && find backup -name 'daily_*.dump' -mtime +30 -delete
 ```
 
 cron reports nothing to your screen, so **make sure failures can reach you**: set `MAILTO=` in the crontab, notify a monitoring service, or alert on the last-modified time of `backup/`. The worst outcome is discovering at restore time that the job had been failing every night. `docker` may also be missing from cron's minimal PATH, so run the command by hand once to confirm.
@@ -803,7 +823,11 @@ docker compose start app                    # resume the app
 - `--clean --if-exists` drops and recreates existing objects (existing data is lost).
 - `--single-transaction` rolls everything back if the restore fails midway (no half-restored state).
 - **Match the dump to the application version you will run against it.** `SPRING_JPA_HIBERNATE_DDL_AUTO` is `update` under `docker compose`, so starting the app after restoring an older dump lets Hibernate alter the schema you just restored (under a `validate` setup the app fails to start instead). After upgrading the application, keep a fresh dump taken with that version.
-- **Rehearse the restore procedure regularly.** A backup you cannot restore is no backup at all. Inspect a dump's contents with `pg_restore --list <dump file>`.
+- **Rehearse the restore procedure regularly.** A backup you cannot restore is no backup at all. Inspect a dump's contents with the command below (`pg_restore` exists only inside the container, so running it directly on the host gives `command not found`):
+
+  ```bash
+  docker compose exec -T db pg_restore --list < backup/daily_YYYYMMDD.dump
+  ```
 
 ## Known limitations / future work
 
