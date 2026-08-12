@@ -311,9 +311,13 @@ docker compose logs -f db      # PostgreSQL のログを追いかける
 転送先を用意できない場合は、定期的にファイルへ書き出す簡易な方法もあります。`docker compose logs` は毎回**保持しているログの先頭から**出力するため、`--since` で前回実行以降に絞らないと同じ内容を何度も追記してしまいます（実行間隔と `--since` の値を必ず揃えてください）:
 
 ```cron
-# 1 時間ごとに収集する例（--since は実行間隔と揃える。cron では % を \% にエスケープする）
-0 * * * * cd /path/to/Expense-Management-Rest-API && mkdir -p logs && docker compose logs --no-color --timestamps --since 60m app >> "logs/app_$(date +\%Y\%m\%d).log"
+# 1 時間ごとに収集する例（cron では % を \% にエスケープする）
+0 * * * * cd /path/to/Expense-Management-Rest-API && mkdir -p logs && docker compose logs --no-color --timestamps --since 70m app >> "logs/app_$(date +\%Y\%m\%d).log"
 ```
+
+`--since` は実行間隔（60 分）より少し長く取っています。ぴったり揃えると、ホストの負荷などで
+起動が数分ずれたときに前回の収集終了時刻との間に隙間ができ、その分のログを取りこぼすためです。
+重複分は許容し、取りこぼしを防ぐ側に倒しています（重複が気になる場合は収集後に整理してください）。
 
 ### DB バックアップ（取得）
 
@@ -375,11 +379,14 @@ docker compose stop app \
 - `--clean --if-exists` は既存オブジェクトを削除してから作り直します（既存データは失われます）。
 - `--single-transaction` により、途中で失敗した場合は何も変更されません（中途半端な状態を防ぐ）。
 - **dump は、復元先で動かすアプリのバージョンと揃えてください。** スキーマ反映方針 `SPRING_JPA_HIBERNATE_DDL_AUTO` は `docker compose` では `update` です。古い dump を戻してからアプリを起動すると、Hibernate が復元直後のスキーマを勝手に変更します（`validate` 運用の場合は代わりに起動が失敗します）。アプリを更新したら、その版で取り直した dump を保持してください。
+- **復元に失敗した場合、アプリは停止したままになります**（`&&` で連結しているため `start app` に進みません）。原因を解消して復元をやり直すか、いったん復元前の状態で再開する場合は `docker compose start app` を手で実行してください。エラーを見たあとに放置すると、停止したままサービス断が続きます。
 - **リストア手順は定期的にリハーサルしてください。** 復元できないバックアップは無いのと同じです。中身の一覧は次のコマンドで確認できます（`pg_restore` はコンテナ内にしかないため、ホストで直接実行しても `command not found` になります）:
 
   ```bash
   docker compose exec -T db pg_restore --list < backup/daily_YYYYMMDD.dump
   ```
+
+---
 
 ## 既知の制約・今後の課題
 
@@ -783,9 +790,13 @@ Container logs grow without bound by default, so start by configuring rotation t
 If no forwarding target is available, periodically dump them to a file instead. `docker compose logs` always prints from the beginning of the retained buffer, so without `--since` each run re-appends everything you already collected — keep the interval and the `--since` value in sync:
 
 ```cron
-# Collect hourly (keep --since matched to the interval; escape % as \% in crontab)
-0 * * * * cd /path/to/Expense-Management-Rest-API && mkdir -p logs && docker compose logs --no-color --timestamps --since 60m app >> "logs/app_$(date +\%Y\%m\%d).log"
+# Collect hourly (escape % as \% in crontab)
+0 * * * * cd /path/to/Expense-Management-Rest-API && mkdir -p logs && docker compose logs --no-color --timestamps --since 70m app >> "logs/app_$(date +\%Y\%m\%d).log"
 ```
+
+`--since` is deliberately a little longer than the 60-minute interval. Matching it exactly leaves a gap
+whenever a run starts a few minutes late (host load, suspend), and those lines are lost for good. This errs
+toward overlapping duplicates rather than dropping entries; de-duplicate afterwards if it bothers you.
 
 ### Taking a database backup
 
@@ -847,11 +858,14 @@ docker compose stop app \
 - `--clean --if-exists` drops and recreates existing objects (existing data is lost).
 - `--single-transaction` rolls everything back if the restore fails midway (no half-restored state).
 - **Match the dump to the application version you will run against it.** `SPRING_JPA_HIBERNATE_DDL_AUTO` is `update` under `docker compose`, so starting the app after restoring an older dump lets Hibernate alter the schema you just restored (under a `validate` setup the app fails to start instead). After upgrading the application, keep a fresh dump taken with that version.
+- **If the restore fails, the app is left stopped** — the `&&` chain never reaches `start app`. Fix the cause and retry the restore, or run `docker compose start app` by hand to resume on the pre-restore data. Walking away after seeing the error leaves the service down.
 - **Rehearse the restore procedure regularly.** A backup you cannot restore is no backup at all. Inspect a dump's contents with the command below (`pg_restore` exists only inside the container, so running it directly on the host gives `command not found`):
 
   ```bash
   docker compose exec -T db pg_restore --list < backup/daily_YYYYMMDD.dump
   ```
+
+---
 
 ## Known limitations / future work
 
