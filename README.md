@@ -310,10 +310,9 @@ docker compose logs -f db      # PostgreSQL のログを追いかける
 
 転送先を用意できない場合は、定期的にファイルへ書き出す簡易な方法もあります。`docker compose logs` は毎回**保持しているログの先頭から**出力するため、`--since` で前回実行以降に絞らないと同じ内容を何度も追記してしまいます（実行間隔と `--since` の値を必ず揃えてください）:
 
-```bash
-mkdir -p logs
-# 1 時間ごとに実行する場合の例（--since も 60m に揃える）
-docker compose logs --no-color --timestamps --since 60m app >> "logs/app_$(date +%Y%m%d).log"
+```cron
+# 1 時間ごとに収集する例（--since は実行間隔と揃える。cron では % を \% にエスケープする）
+0 * * * * cd /path/to/Expense-Management-Rest-API && mkdir -p logs && docker compose logs --no-color --timestamps --since 60m app >> "logs/app_$(date +\%Y\%m\%d).log"
 ```
 
 ### DB バックアップ（取得）
@@ -329,12 +328,16 @@ mkdir -p backup
 T="backup/.tmp_manual.dump"
 docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" \
   && mv "$T" "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump" \
-  || { rm -f "$T"; echo "バックアップに失敗しました" >&2; }
+  || { rm -f "$T"; echo "バックアップに失敗しました" >&2; false; }
 ```
+
+（末尾の `false` は終了ステータスを 1 にするためのものです。これが無いと `echo` の成功で全体が 0 になり、
+この手順をスクリプトに組み込んだときに「失敗したのに成功」と判定されます。対話シェルに貼る前提のため
+`exit 1` は使いません＝端末ごと終了してしまうため。）
 
 定期取得する場合の cron 例（毎日 3:00 に取得し、30 日より古い**自動取得分だけ**を別ジョブで削除）。ポイントは 3 つあります:
 
-- 上と同じ理由で一時ファイルに書き出し、**成功したときだけ** `mv` で確定する。失敗した一時ファイルはその場で片付ける（放置すると隠しファイルとして毎日積み上がり、`ls` に見えないままディスクを埋めます）
+- 上と同じ理由で一時ファイルに書き出し、**成功したときだけ** `mv` で確定する。失敗した一時ファイルはその場で片付ける（`.tmp_daily.dump` は固定名なので翌日の実行で上書きされ積み上がりはしませんが、失敗した残骸が `backup/` に残っていると障害調査時に正規のバックアップと紛らわしいため）
 - 自動取得分は `daily_` を付けて手動バックアップと名前空間を分け、削除対象を `daily_` に限定する（同じ命名にすると、アップグレード前に取っておいた手動スナップショットまで 30 日後に消えます）
 - 世代削除（`find`）は取得ジョブと分ける。同じ `&&` 連鎖に入れると、バックアップは正常に取れているのに古いファイルの削除に失敗しただけで「失敗」と通知されます。誤報が続くと、本当に失敗した晩の通知を見逃す原因になります
 
@@ -343,7 +346,13 @@ docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker'
 5 3 * * * cd /path/to/Expense-Management-Rest-API && find backup -name 'daily_*.dump' -mtime +30 -delete
 ```
 
-cron はエラーを画面に出さないため、**失敗に気づける経路を必ず用意してください**（crontab の `MAILTO=` を設定する、監視サービスへ通知する、`backup/` の最新更新時刻を監視する、など）。復元が必要になった時点で「実は毎晩失敗していた」と判明するのが最悪のケースです。`docker` が cron の PATH に無い場合もあるため、初回はコマンドを手で実行して確認します。
+cron はエラーを画面に出さないため、**失敗に気づける経路を必ず用意してください**（crontab の `MAILTO=` を設定する、監視サービスへ通知する、`backup/` の最新更新時刻を監視する、など）。復元が必要になった時点で「実は毎晩失敗していた」と判明するのが最悪のケースです。
+
+`docker` が cron の最小 PATH に無いこともよくある失敗です。**対話シェルで手実行しても、この問題は再現しません**（ログインシェルの PATH は cron のものと別物のため、必ず成功してしまいます）。次のいずれかで対処してください:
+
+- crontab の先頭に `PATH=/usr/local/bin:/usr/bin:/bin` を書く
+- コマンドを絶対パス（`/usr/bin/docker compose ...`）で書く
+- 投入前に `env -i /bin/sh -c 'cd /path/to/Expense-Management-Rest-API && docker compose ps'` で、環境変数をほぼ空にした状態を模して確認する
 
 バックアップファイルには支出データがそのまま含まれるため、リポジトリにコミットせず（`backup/` は `.gitignore` 済み）、保管先のアクセス権に注意してください。また、`backup/` は DB ボリューム `db-data` と**同じホスト上**にあります。この状態ではディスク故障や誤操作で DB とバックアップを同時に失うため、取得した dump は別のストレージ（別ホスト・オブジェクトストレージ等）へ複製してください。
 
@@ -351,11 +360,14 @@ cron はエラーを画面に出さないため、**失敗に気づける経路�
 
 アプリを止めてから既存データを置き換える形で復元します。
 
+復元に失敗したらアプリを起動しないよう、`&&` で連結します（改行で並べると、`pg_restore` が失敗して
+DB が復元前の状態にロールバックされたあとも `start app` が走り、古いデータのままアプリが復帰します）:
+
 ```bash
-docker compose stop app                     # 書き込みを止める
-docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d expensetracker --clean --if-exists --single-transaction' \
-  < backup/expensetracker_YYYYMMDD_HHMMSS.dump
-docker compose start app                    # アプリを再開する
+docker compose stop app \
+  && docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d expensetracker --clean --if-exists --single-transaction' \
+       < backup/expensetracker_YYYYMMDD_HHMMSS.dump \
+  && docker compose start app
 ```
 
 （ファイル名は手動バックアップの `expensetracker_YYYYMMDD_HHMMSS.dump` 例。cron で取得した世代は `daily_YYYYMMDD.dump` 形式なので読み替えてください。）
@@ -770,10 +782,9 @@ Container logs grow without bound by default, so start by configuring rotation t
 
 If no forwarding target is available, periodically dump them to a file instead. `docker compose logs` always prints from the beginning of the retained buffer, so without `--since` each run re-appends everything you already collected — keep the interval and the `--since` value in sync:
 
-```bash
-mkdir -p logs
-# Example for running hourly (keep --since matched to the interval)
-docker compose logs --no-color --timestamps --since 60m app >> "logs/app_$(date +%Y%m%d).log"
+```cron
+# Collect hourly (keep --since matched to the interval; escape % as \% in crontab)
+0 * * * * cd /path/to/Expense-Management-Rest-API && mkdir -p logs && docker compose logs --no-color --timestamps --since 60m app >> "logs/app_$(date +\%Y\%m\%d).log"
 ```
 
 ### Taking a database backup
@@ -789,12 +800,16 @@ mkdir -p backup
 T="backup/.tmp_manual.dump"
 docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -Fc expensetracker' > "$T" \
   && mv "$T" "backup/expensetracker_$(date +%Y%m%d_%H%M%S).dump" \
-  || { rm -f "$T"; echo "backup failed" >&2; }
+  || { rm -f "$T"; echo "backup failed" >&2; false; }
 ```
+
+(The trailing `false` forces a non-zero exit status. Without it the successful `echo` makes the whole list
+exit 0, so wrapping this in a script would report a failed dump as success. `exit 1` is deliberately not
+used here because the snippet is meant to be pasted into an interactive shell, which it would close.)
 
 Example cron entries (daily at 03:00, with **only automated** generations older than 30 days pruned by a separate job). Three things matter here:
 
-- Write to a temp file and `mv` it into place **only on success**, for the same reason as above. Clean up the temp file when the dump fails; left behind, these hidden files accumulate daily and fill the disk without ever showing up in `ls`.
+- Write to a temp file and `mv` it into place **only on success**, for the same reason as above. Clean up the temp file when the dump fails: `.tmp_daily.dump` is a fixed name so it is overwritten the next day rather than accumulating, but a leftover partial file in `backup/` is easy to mistake for a real backup while triaging an incident.
 - Automated dumps get a `daily_` prefix so they occupy a different namespace from manual ones, and the deletion is scoped to `daily_`. Sharing one naming scheme would silently delete the manual pre-upgrade snapshot you meant to keep, 30 days later.
 - Keep the retention `find` out of the backup job. Chained with `&&`, a failure to delete an old file reports the whole run as failed even though the backup was taken correctly — and recurring false alarms are how the one genuine failure gets ignored.
 
@@ -803,7 +818,13 @@ Example cron entries (daily at 03:00, with **only automated** generations older 
 5 3 * * * cd /path/to/Expense-Management-Rest-API && find backup -name 'daily_*.dump' -mtime +30 -delete
 ```
 
-cron reports nothing to your screen, so **make sure failures can reach you**: set `MAILTO=` in the crontab, notify a monitoring service, or alert on the last-modified time of `backup/`. The worst outcome is discovering at restore time that the job had been failing every night. `docker` may also be missing from cron's minimal PATH, so run the command by hand once to confirm.
+cron reports nothing to your screen, so **make sure failures can reach you**: set `MAILTO=` in the crontab, notify a monitoring service, or alert on the last-modified time of `backup/`. The worst outcome is discovering at restore time that the job had been failing every night.
+
+`docker` missing from cron's minimal PATH is another common failure, and **running the command by hand will not reproduce it** — your login shell's PATH is not cron's, so the manual run always succeeds. Do one of the following instead:
+
+- Put `PATH=/usr/local/bin:/usr/bin:/bin` at the top of the crontab.
+- Use absolute paths in the command (`/usr/bin/docker compose ...`).
+- Before installing it, test with a near-empty environment: `env -i /bin/sh -c 'cd /path/to/Expense-Management-Rest-API && docker compose ps'`.
 
 Backup files contain the raw expense data: do not commit them (`backup/` is gitignored) and control access to wherever they are stored. Note also that `backup/` sits on the **same host** as the `db-data` volume — a disk failure or a stray delete would take the database and every backup at once, so copy the dumps to separate storage (another host, object storage, etc.).
 
@@ -811,11 +832,14 @@ Backup files contain the raw expense data: do not commit them (`backup/` is giti
 
 Stop the app first, then restore over the existing data.
 
+Chain the steps with `&&` so the app is not restarted when the restore fails (listed on separate lines,
+`start app` would run even after `pg_restore` rolled the database back, bringing the app up on stale data):
+
 ```bash
-docker compose stop app                     # stop writes
-docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d expensetracker --clean --if-exists --single-transaction' \
-  < backup/expensetracker_YYYYMMDD_HHMMSS.dump
-docker compose start app                    # resume the app
+docker compose stop app \
+  && docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d expensetracker --clean --if-exists --single-transaction' \
+       < backup/expensetracker_YYYYMMDD_HHMMSS.dump \
+  && docker compose start app
 ```
 
 (The filename shows the manual-backup naming `expensetracker_YYYYMMDD_HHMMSS.dump`; generations taken by the cron job use the `daily_YYYYMMDD.dump` form.)
