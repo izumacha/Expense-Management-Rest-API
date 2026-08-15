@@ -323,6 +323,11 @@ docker compose logs -f db      # PostgreSQL のログを追いかける
 
 DB の実体は名前付きボリューム `db-data` にあります。バックアップは `pg_dump` の**カスタム形式**（`-Fc`。圧縮され、`pg_restore` で部分復元も可能）で取得します。コンテナ内のローカル接続はパスワード入力なしで実行できます。
 
+> **自動化する場合**: スクリプト（`scripts/backup-db.sh` / `scripts/restore-db.sh`）と
+> GitHub Actions（`.github/workflows/backup.yml`。毎日 JST 03:00 に暗号化ダンプを artifact 保存）を
+> 用意しています。Secrets の設定・復号手順・世代管理は [docs/backup.md](docs/backup.md) を参照してください。
+> 以下は `docker compose` だけで完結する手動運用の手順です。
+
 DB ユーザー名はコンテナ内の環境変数 `POSTGRES_USER`（`.env` の `SPRING_DATASOURCE_USERNAME` 由来）から解決させます。ホストシェルで展開すると `.env` の値が反映されないため、シングルクォートのまま実行してください。
 
 リダイレクト先を直接バックアップ名にすると、`pg_dump` が失敗しても**シェルが先に出力ファイルを作ってしまう**ため、0 バイトや中途半端なファイルが正規のバックアップとして残ります。一時ファイルへ書き出し、成功したときだけ `mv` で確定してください:
@@ -801,6 +806,11 @@ toward overlapping duplicates rather than dropping entries; de-duplicate afterwa
 ### Taking a database backup
 
 The database lives in the named volume `db-data`. Take backups with `pg_dump` in **custom format** (`-Fc`: compressed, and `pg_restore` can restore selectively). Local connections inside the container require no password prompt.
+
+> **To automate this**: the repo ships scripts (`scripts/backup-db.sh` / `scripts/restore-db.sh`) and a
+> GitHub Actions workflow (`.github/workflows/backup.yml`, which uploads an encrypted dump as an artifact
+> daily at 03:00 JST). See [docs/backup.md](docs/backup.md) (Japanese) for the required secrets, decryption
+> steps, and retention policy. The steps below are the manual, `docker compose`-only procedure.
 
 Resolve the database user from the container-side environment variable `POSTGRES_USER` (populated from `SPRING_DATASOURCE_USERNAME` in `.env`). Keep the single quotes: expanding the variable in the host shell would ignore the `.env` value.
 
