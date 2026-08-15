@@ -84,7 +84,6 @@ jobs:
 
       # ダンプを取得し、artifact に載せられる形 (GPG 暗号化済み) にするステップ。
       - name: Run backup
-        id: backup
         if: steps.guard.outputs.skipped == 'false'
         env:
           BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
