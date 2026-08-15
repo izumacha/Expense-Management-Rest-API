@@ -34,6 +34,13 @@ jobs:
   backup:
     name: pg_dump backup
     runs-on: ubuntu-latest
+    env:
+      # ダンプの出力先 (単一の参照元。Run backup / gpg ループ / artifact path で共用する)
+      BACKUP_DIR: ./backup
+      # ダンプのファイル名タイムスタンプを JST にする (cron は UTC 18:00 = JST 03:00 のため、
+      # ランナー既定の UTC のままだと前日 18 時台の名前になり、docs/backup.md の
+      # 「毎日 JST 03:00 のバックアップ」と日付がずれる)
+      TZ: Asia/Tokyo
     steps:
       - uses: actions/checkout@v7
 
@@ -63,12 +70,12 @@ jobs:
             echo "public リポジトリの artifact に平文の支出データのダンプは置けないため中止します。" >&2
             exit 1
           fi
-          # スクリプトに接続先を渡してバックアップを実行する。出力先はワークスペース配下。
-          DATABASE_URL="${BACKUP_DATABASE_URL}" BACKUP_DIR=./backup \
-            bash scripts/backup-db.sh
+          # スクリプトに接続先を渡してバックアップを実行する。出力先はワークスペース配下
+          # (BACKUP_DIR はジョブ env で一元管理)。
+          DATABASE_URL="${BACKUP_DATABASE_URL}" bash scripts/backup-db.sh
           # ダンプを GPG (AES256, 対称鍵) で暗号化する。パスフレーズはコマンドラインに展開せず
           # 標準入力 (--passphrase-fd 0) で渡す。暗号化後は平文ダンプを必ず削除する。
-          for dump in backup/*.dump; do
+          for dump in "${BACKUP_DIR}"/*.dump; do
             printf '%s' "${BACKUP_ENCRYPTION_PASSPHRASE}" | gpg --batch --symmetric \
               --cipher-algo AES256 --pinentry-mode loopback --passphrase-fd 0 \
               --output "${dump}.gpg" "${dump}"
@@ -84,7 +91,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: db-backup-${{ github.run_id }}
-          path: backup/*.dump.gpg
+          path: ${{ env.BACKUP_DIR }}/*.dump.gpg
           # 暗号化済みとはいえ本番データ由来のため保持を 7 日に短縮する
           retention-days: 7
           if-no-files-found: error

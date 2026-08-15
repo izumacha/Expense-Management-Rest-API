@@ -116,10 +116,9 @@ command -v pg_dump >/dev/null 2>&1 || die "pg_dump が見つかりません。po
 # バックアップ本体
 # ───────────────────────────────────────────────────────────────────────────
 
-# 保存先ディレクトリを作成する (既に存在しても -p でエラーにしない)
-mkdir -p "$BACKUP_DIR"
-
-# ファイル名に使うタイムスタンプを生成する (例: 20260814_030000)。OS 非依存の標準書式のみ使用
+# ファイル名に使うタイムスタンプを生成する (例: 20260814_030000)。OS 非依存の標準書式のみ使用。
+# ホストのローカルタイムゾーンで命名される (GitHub Actions では backup.yml が TZ=Asia/Tokyo を
+# 設定するため、JST 03:00 の定期実行はその日の日付になる)
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 # ダンプ先のフルパスを組み立てる (custom 形式は拡張子 .dump が慣例)
 DUMP_FILE="${BACKUP_DIR}/${DUMP_PREFIX}${TIMESTAMP}.dump"
@@ -129,9 +128,14 @@ if [ "$DRY_RUN" = true ]; then
     # 何をする予定かを stderr に表示する (パスワードを含む DATABASE_URL は出さない)
     log "[dry-run] pg_dump -> ${DUMP_FILE}"
     log "[dry-run] ${BACKUP_RETENTION_DAYS} 日より古い ${DUMP_PREFIX}*.dump を ${BACKUP_DIR} から削除予定"
-    # 実処理はせず正常終了する
+    # 実処理はせず正常終了する (mkdir より前に抜けるため、dry-run はディレクトリも作らない)
     exit 0
 fi
+
+# 保存先ディレクトリを作成する (既に存在しても -p でエラーにしない)。
+# dry-run 判定より後に置く: 「実行内容だけ表示する」と約束した dry-run が
+# ディレクトリ作成という副作用を持たないようにするため
+mkdir -p "$BACKUP_DIR"
 
 # pg_dump を custom 形式 (-Fc, 内部 gzip 圧縮) で実行しファイルへ出力する。
 # --no-owner / --no-privileges で復元先の権限差異による失敗を避ける。
