@@ -116,15 +116,15 @@ command -v pg_dump >/dev/null 2>&1 || die "pg_dump が見つかりません。po
 # バックアップ本体
 # ───────────────────────────────────────────────────────────────────────────
 
-# 保存先ディレクトリを作成する (既に存在しても -p でエラーにしない)
-mkdir -p "$BACKUP_DIR"
-
 # ファイル名に使うタイムスタンプを生成する (例: 20260814_030000)。OS 非依存の標準書式のみ使用
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 # ダンプ先のフルパスを組み立てる (custom 形式は拡張子 .dump が慣例)
 DUMP_FILE="${BACKUP_DIR}/${DUMP_PREFIX}${TIMESTAMP}.dump"
 
-# dry-run なら実行予定だけ表示して終了する
+# dry-run なら実行予定だけ表示して終了する。
+# ディレクトリ作成より前に抜けるのが重要: --help が「実際には dump / 削除せず、実行内容だけ
+# 表示する」と約束している以上、確認のつもりで叩いた --dry-run がファイルシステムに
+# 空の保存先ディレクトリを残してはいけない。
 if [ "$DRY_RUN" = true ]; then
     # 何をする予定かを stderr に表示する (パスワードを含む DATABASE_URL は出さない)
     log "[dry-run] pg_dump -> ${DUMP_FILE}"
@@ -132,6 +132,9 @@ if [ "$DRY_RUN" = true ]; then
     # 実処理はせず正常終了する
     exit 0
 fi
+
+# 保存先ディレクトリを作成する (既に存在しても -p でエラーにしない)
+mkdir -p "$BACKUP_DIR"
 
 # pg_dump を custom 形式 (-Fc, 内部 gzip 圧縮) で実行しファイルへ出力する。
 # --no-owner / --no-privileges で復元先の権限差異による失敗を避ける。
