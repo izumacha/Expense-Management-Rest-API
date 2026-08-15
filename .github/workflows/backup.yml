@@ -34,6 +34,15 @@ jobs:
   backup:
     name: pg_dump backup
     runs-on: ubuntu-latest
+    env:
+      # ダンプの出力先。ここが唯一の参照元で、backup-db.sh は環境変数として受け取り、
+      # artifact の path もこの値を参照する (§6 定数の一元管理)。
+      BACKUP_DIR: ./backup
+      # ダンプのファイル名に付くタイムスタンプを JST にする。cron は UTC 18:00 (= JST 03:00)
+      # で回るため、ランナー既定の UTC のままだと「前日の 18 時台」の名前になり、
+      # docs/backup.md が説明する「毎日 JST 03:00 のバックアップ」と日付がずれて、
+      # 復元したい日のダンプを探すときに 1 日ぶん取り違える。
+      TZ: Asia/Tokyo
     steps:
       - uses: actions/checkout@v7
 
@@ -81,13 +90,13 @@ jobs:
           BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
           BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
         run: |
-          # スクリプトに接続先を渡してバックアップを実行する。出力先はワークスペース配下。
+          # スクリプトに接続先を渡してバックアップを実行する (出力先 BACKUP_DIR は
+          # ジョブレベルの env から自動的に引き継がれる)。
           # backup-db.sh は「作成したダンプのパスを標準出力に 1 行返す」契約なので、それを
           # そのまま受け取る。backup/*.dump のグロブで拾い直すと (a) 何もマッチしないとき
           # bash がリテラル文字列を渡してしまい原因の分かりにくい失敗になり、(b) 無関係な
           # *.dump がワークスペースにあれば巻き込んで暗号化してしまう。
-          DUMP_FILE="$(DATABASE_URL="${BACKUP_DATABASE_URL}" BACKUP_DIR=./backup \
-            bash scripts/backup-db.sh)"
+          DUMP_FILE="$(DATABASE_URL="${BACKUP_DATABASE_URL}" bash scripts/backup-db.sh)"
           # ダンプを GPG (AES256, 対称鍵) で暗号化する。パスフレーズはコマンドラインに展開せず
           # 標準入力 (--passphrase-fd 0) で渡す (ps や /proc から見えないようにするため)。
           printf '%s' "${BACKUP_ENCRYPTION_PASSPHRASE}" | gpg --batch --symmetric \
@@ -104,7 +113,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: db-backup-${{ github.run_id }}
-          path: backup/*.dump.gpg
+          path: ${{ env.BACKUP_DIR }}/*.dump.gpg
           # 暗号化済みとはいえ本番データ由来のため保持を 7 日に短縮する
           retention-days: 7
           if-no-files-found: error

@@ -81,7 +81,12 @@ command -v pg_restore >/dev/null 2>&1 || die "pg_restore が見つかりませ�
 log "復元を開始します: ${DUMP_FILE}"
 # pg_restore でダンプを流し込む。--clean --if-exists で既存オブジェクトを作り直し、
 # --no-owner --no-privileges で権限差異による失敗を避ける。
-pg_restore --clean --if-exists --no-owner --no-privileges --dbname="$DATABASE_URL" "$DUMP_FILE" \
+# --single-transaction で復元全体を 1 つのトランザクションにまとめる。これが無いと、
+# --clean が既存テーブルを削除した後の途中失敗 (ディスク不足・接続断など) で
+# 「元データは消えたのに復元は不完全」という半壊状態が残ってしまう。
+# README の手動リストア手順が採用している安全策と同じものを、スクリプト側にも揃える。
+pg_restore --clean --if-exists --single-transaction --no-owner --no-privileges \
+    --dbname="$DATABASE_URL" "$DUMP_FILE" \
     || die "pg_restore に失敗しました。"
 
 # 復元成功をログに出す
