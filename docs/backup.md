@@ -17,9 +17,14 @@ PostgreSQL（`docker-compose.yml` の `db` サービス / DB 名 `expensetracker
 
 ```bash
 DATABASE_URL="postgresql://user:***@localhost:5432/expensetracker" bash scripts/backup-db.sh
-bash scripts/backup-db.sh --dry-run   # 実行内容だけ確認（dump しない）
+# 実行内容だけ確認（dump しない）。事前チェックは dry-run 分岐より先に走るため、
+# DATABASE_URL の設定と pg_dump の存在は dry-run でも必要
+DATABASE_URL="postgresql://user:***@localhost:5432/expensetracker" bash scripts/backup-db.sh --dry-run
 DATABASE_URL="..." bash scripts/restore-db.sh backup/auto_expensetracker_YYYYMMDD_HHMMSS.dump
 ```
+
+ダンプのファイル名に付くタイムスタンプは**実行ホストのローカル時刻**になる（GitHub Actions では
+`backup.yml` が `TZ=Asia/Tokyo` を設定するため JST）。
 
 ## 設定（環境変数）
 
@@ -106,13 +111,13 @@ gpg --batch --decrypt --pinentry-mode loopback --passphrase-fd 0 \
 本番サーバー（または DB に到達できるホスト）の crontab に登録する:
 
 パスワードは URL に埋め込まず `~/.pgpass`（`0600`）に置く（「接続情報の渡し方」参照）。
-crontab に書くとバックアップ実行中の `ps` 出力にも載ってしまうため:
+crontab に書くとバックアップ実行中の `ps` 出力にも載ってしまうため。
+なお **cron のエントリは 1 行で書く**（crontab はシェルと違いバックスラッシュによる行継続を
+解釈しないため、複数行に分けると登録に失敗するか別のコマンドとして解釈される）:
 
 ```cron
 # 毎日 03:00 にバックアップ（出力は syslog/logger 等へ）
-0 3 * * * cd /path/to/Expense-Management-Rest-API && DATABASE_URL="postgresql://backup_ro@localhost:5432/expensetracker" \
-    BACKUP_DIR=/var/backups/expense-tracker BACKUP_RETENTION_DAYS=30 \
-    bash scripts/backup-db.sh >> /var/log/expense-tracker-backup.log 2>&1
+0 3 * * * cd /path/to/Expense-Management-Rest-API && DATABASE_URL="postgresql://backup_ro@localhost:5432/expensetracker" BACKUP_DIR=/var/backups/expense-tracker BACKUP_RETENTION_DAYS=30 bash scripts/backup-db.sh >> /var/log/expense-tracker-backup.log 2>&1
 ```
 
 cron は失敗を画面に出さないため、README の運用手順にある通り**失敗に気づける経路**
@@ -136,7 +141,10 @@ postgresql-client を入れずにバックアップできる。一時ファイ�
    docker compose start app
    ```
 
-3. 復元後にアプリを起動して動作確認する（起動時の Hibernate `validate` がスキーマ整合を確認する）。
+3. 復元後にアプリを起動して動作確認する。**注意**: `docker-compose.yml` は app サービスに
+   `SPRING_JPA_HIBERNATE_DDL_AUTO=update` を設定しているため、復元直後のスキーマは検証されず
+   Hibernate によって**黙って変更されうる**（`validate` は既定値であって compose 経由の既定ではない）。
+   古いダンプを復元した直後の起動では、必要に応じて `validate` に切り替えてスキーマ整合を確認する。
 
 ## 検証（リストアテスト）
 
