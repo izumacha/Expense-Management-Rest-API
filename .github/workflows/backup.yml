@@ -37,20 +37,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # PostgreSQL クライアント (pg_dump) を入れる。GitHub の ubuntu-latest には
-      # postgresql-client を明示導入して pg_dump のバージョン差異を避ける。
-      - name: Install postgresql-client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-
-      # Secret が設定されているときだけ実バックアップを実行する。
-      # 未設定なら no-op (このリポジトリを fork した環境でもジョブが赤くならないようにする)。
-      - name: Run backup
+      # Secret の有無だけを先に判定する (実処理はしない)。
+      # 判定を独立したステップに切り出すのは、未設定 (no-op) の日に postgresql-client の
+      # インストールという数十秒の準備作業を走らせないため。判定・準備・実行を 1 ステップに
+      # 混ぜると「何もしない日でも毎日 apt-get が動く」無駄が生じる。
+      - name: Check backup secrets
+        id: guard
         env:
           BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
           BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
         run: |
+          # 接続先の Secret が無ければバックアップ対象が存在しないので no-op で終える
+          # (このリポジトリを fork した環境でもジョブが赤くならないようにする)。
           if [ -z "${BACKUP_DATABASE_URL}" ]; then
             echo "BACKUP_DATABASE_URL secret が未設定のためスキップします (no-op)。" >&2
             echo "skipped=true" >> "$GITHUB_OUTPUT"
@@ -63,24 +61,46 @@ jobs:
             echo "public リポジトリの artifact に平文の支出データのダンプは置けないため中止します。" >&2
             exit 1
           fi
-          # スクリプトに接続先を渡してバックアップを実行する。出力先はワークスペース配下。
-          DATABASE_URL="${BACKUP_DATABASE_URL}" BACKUP_DIR=./backup \
-            bash scripts/backup-db.sh
-          # ダンプを GPG (AES256, 対称鍵) で暗号化する。パスフレーズはコマンドラインに展開せず
-          # 標準入力 (--passphrase-fd 0) で渡す。暗号化後は平文ダンプを必ず削除する。
-          for dump in backup/*.dump; do
-            printf '%s' "${BACKUP_ENCRYPTION_PASSPHRASE}" | gpg --batch --symmetric \
-              --cipher-algo AES256 --pinentry-mode loopback --passphrase-fd 0 \
-              --output "${dump}.gpg" "${dump}"
-            rm -f "${dump}"
-          done
+          # 両方揃っているので後続ステップを実行してよいことを記録する
           echo "skipped=false" >> "$GITHUB_OUTPUT"
+
+      # PostgreSQL クライアント (pg_dump) を入れる。GitHub の ubuntu-latest には
+      # postgresql-client を明示導入して pg_dump のバージョン差異を避ける。
+      # 実際にダンプを取る日だけ実行する (上の Check backup secrets の判定結果で分岐)。
+      - name: Install postgresql-client
+        if: steps.guard.outputs.skipped == 'false'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      # ダンプを取得し、artifact に載せられる形 (GPG 暗号化済み) にするステップ。
+      - name: Run backup
         id: backup
+        if: steps.guard.outputs.skipped == 'false'
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+        run: |
+          # スクリプトに接続先を渡してバックアップを実行する。出力先はワークスペース配下。
+          # backup-db.sh は「作成したダンプのパスを標準出力に 1 行返す」契約なので、それを
+          # そのまま受け取る。backup/*.dump のグロブで拾い直すと (a) 何もマッチしないとき
+          # bash がリテラル文字列を渡してしまい原因の分かりにくい失敗になり、(b) 無関係な
+          # *.dump がワークスペースにあれば巻き込んで暗号化してしまう。
+          DUMP_FILE="$(DATABASE_URL="${BACKUP_DATABASE_URL}" BACKUP_DIR=./backup \
+            bash scripts/backup-db.sh)"
+          # ダンプを GPG (AES256, 対称鍵) で暗号化する。パスフレーズはコマンドラインに展開せず
+          # 標準入力 (--passphrase-fd 0) で渡す (ps や /proc から見えないようにするため)。
+          printf '%s' "${BACKUP_ENCRYPTION_PASSPHRASE}" | gpg --batch --symmetric \
+            --cipher-algo AES256 --pinentry-mode loopback --passphrase-fd 0 \
+            --output "${DUMP_FILE}.gpg" "${DUMP_FILE}"
+          # 暗号化に成功した後で平文ダンプを削除する (失敗時は set -e で先に停止するため、
+          # 平文を消してから暗号化に失敗してバックアップを丸ごと失う事故は起きない)。
+          rm -f "${DUMP_FILE}"
 
       # 暗号化済みダンプを artifact としてアップロードする (Secret 設定時のみファイルが存在する)。
       # 復号手順は docs/backup.md を参照 (gpg --decrypt)。
       - name: Upload backup artifact
-        if: steps.backup.outputs.skipped == 'false'
+        if: steps.guard.outputs.skipped == 'false'
         uses: actions/upload-artifact@v7
         with:
           name: db-backup-${{ github.run_id }}
