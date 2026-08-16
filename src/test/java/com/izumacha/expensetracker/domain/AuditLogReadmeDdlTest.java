@@ -439,6 +439,18 @@ class AuditLogReadmeDdlTest {
                     rejectUnsupported("列 " + name + " に直接書かれた制約「" + tokens[i] + "」", item);
                 }
             }
+            // 修飾子として読み始めた後は、知っている語しか許さない。
+            // 【なぜ必要か】修飾子をひとつなぎの文字列にして「NOT NULL を含むか」だけを見ると、
+            // その先に続く未知の指定（`DEFAULT now()` や `GENERATED ALWAYS AS (...) STORED` など）を
+            // 黙って読み飛ばしてしまう。正本と突き合わせていない指定が本番の DDL に入るのに
+            // 検証は緑のまま、という「範囲外は落とす」という約束を破った状態になる
+            for (int i = modifierStart; i < tokens.length; i++) {
+                // 知っている修飾子でなければ、正本と突き合わせられないので止める
+                if (!SUPPORTED_COLUMN_MODIFIERS.contains(tokens[i])) {
+                    // 何が扱えないかを示して停止する
+                    rejectUnsupported("列 " + name + " に付いた指定「" + tokens[i] + "」", item);
+                }
+            }
             // 列に直接書かれた主キー指定は、表制約と同じく主キーの構成列になる
             if (modifiers.contains(PRIMARY_KEY_KEYWORD)) {
                 // 主キーの列として加える
@@ -505,6 +517,12 @@ class AuditLogReadmeDdlTest {
             // どのファイルが読めなかったかを添えて停止する
             throw new IllegalStateException("README を読み取れません: " + README_PATH.toAbsolutePath(), e);
         }
+        // 正本のテーブル名を持つテーブル定義の開始位置を集める入れ物。
+        // 【なぜ全部集めるか】README は日英 2 言語なので、英語側にも同じ DDL が写されることがありうる。
+        // 最初の 1 つだけを見ていると、2 つ目の写しは誰にも検証されないまま古くなり、
+        // 英語だけを読む運用者に古い DDL を渡す。逆に「別のテーブルの DDL が増えた」だけで
+        // 落としてはいけない（この走査は取り違えないためにテーブル名で選んでいる）
+        List<Integer> matches = new ArrayList<>();
         // 最初のテーブル定義を探す
         int cursor = readme.indexOf(CREATE_TABLE_KEYWORD);
         // 見つからなくなるまで 1 文ずつ確認する
@@ -523,38 +541,41 @@ class AuditLogReadmeDdlTest {
                 // 指定を落として残りをテーブル名とする
                 tableName = tableName.substring(IF_NOT_EXISTS_KEYWORD.length()).trim();
             }
-            // 正本と完全に一致したらこの文が目的の DDL
+            // 正本と完全に一致したものだけを候補として覚えておく（別テーブルの DDL は無視する）
             if (tableName.equals(expectedTableName)) {
-                // 同じテーブルの DDL が他にも書かれていないことを確かめる。
-                // 【なぜ確かめるか】README は日英 2 言語なので、英語側にも同じ DDL が写される
-                // ことがありうる。最初に見つけた 1 つだけを見ていると、2 つ目の写しは
-                // 誰にも検証されないまま古くなり、英語だけを読む運用者に古い DDL を渡す
-                assertThat(readme.indexOf(CREATE_TABLE_KEYWORD, cursor + CREATE_TABLE_KEYWORD.length()))
-                        // 失敗時に何が起きているかと直し方を示す
-                        .as("README に %s の DDL が複数あります"
-                                + "（写しが増えると検証されない方が古くなります。1 箇所にまとめてください）",
-                                expectedTableName)
-                        // 2 つ目のテーブル定義が無いことを検証する
-                        .isNegative();
-                // DDL ブロックの終わり（次のコードフェンス）を探す
-                int end = readme.indexOf(CODE_FENCE, cursor);
-                // 閉じフェンスが無ければ Markdown が壊れているので失敗させる
-                assertThat(end)
-                        // 失敗時に何が起きたかを示す
-                        .as("README の DDL ブロックを閉じるコードフェンス（%s）が見つかりません", CODE_FENCE)
-                        // 見つかった位置は 0 以上になる
-                        .isNotNegative();
-                // 開始位置から閉じフェンスの手前までを DDL 本体とし、コメントを落として返す
-                return removeLineComments(readme.substring(cursor, end));
+                // 開始位置を候補に加える
+                matches.add(cursor);
             }
-            // 一致しなければ次のテーブル定義を探す
+            // 次のテーブル定義を探す
             cursor = readme.indexOf(CREATE_TABLE_KEYWORD, cursor + CREATE_TABLE_KEYWORD.length());
         }
         // 正本のテーブル名を持つ DDL が無い＝本番への適用手順が失われている（またはテーブル名がずれた）
-        throw new IllegalStateException(
-                // 何が無くて、どう直せばよいかを示す
-                "README に「" + CREATE_TABLE_KEYWORD + " " + expectedTableName + "」が見つかりません"
-                        + "（本番へ手動適用する DDL が失われていないか、テーブル名が @Table とずれていないか確認してください）");
+        if (matches.isEmpty()) {
+            // 何が無くて、どう直せばよいかを示して停止する
+            throw new IllegalStateException(
+                    "README に「" + CREATE_TABLE_KEYWORD + " " + expectedTableName + "」が見つかりません"
+                            + "（本番へ手動適用する DDL が失われていないか、テーブル名が @Table とずれていないか確認してください）");
+        }
+        // 同じテーブルの DDL が 2 つ以上あれば、検証されない方が古くなるので止める
+        assertThat(matches)
+                // 失敗時に何が起きているかと直し方を示す
+                .as("README に %s の DDL が複数あります"
+                        + "（写しが増えると検証されない方が古くなります。1 箇所にまとめてください）",
+                        expectedTableName)
+                // 写しが 1 つだけであることを検証する
+                .hasSize(1);
+        // 唯一の開始位置を取り出す
+        int start = matches.get(0);
+        // DDL ブロックの終わり（次のコードフェンス）を探す
+        int end = readme.indexOf(CODE_FENCE, start);
+        // 閉じフェンスが無ければ Markdown が壊れているので失敗させる
+        assertThat(end)
+                // 失敗時に何が起きたかを示す
+                .as("README の DDL ブロックを閉じるコードフェンス（%s）が見つかりません", CODE_FENCE)
+                // 見つかった位置は 0 以上になる
+                .isNotNegative();
+        // 開始位置から閉じフェンスの手前までを DDL 本体とし、コメントを落として返す
+        return removeLineComments(readme.substring(start, end));
     }
 
     /**
