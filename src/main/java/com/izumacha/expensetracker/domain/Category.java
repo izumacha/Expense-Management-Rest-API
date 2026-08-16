@@ -1,8 +1,12 @@
 // カテゴリのドメインパッケージ
 package com.izumacha.expensetracker.domain;
 
+// 変更を監査ログへ記録するエンティティリスナ
+import com.izumacha.expensetracker.audit.EntityAuditListener;
 // JPA のエンティティ関連アノテーションを取り込む
 import jakarta.persistence.Column;
+// エンティティリスナを紐づけるアノテーション
+import jakarta.persistence.EntityListeners;
 // JPA のエンティティ宣言用アノテーション
 import jakarta.persistence.Entity;
 // 主キーの生成方式指定用アノテーション
@@ -32,13 +36,18 @@ import lombok.Setter;
 // 以前はここにも @Table(uniqueConstraints = ...) で同じ制約を重複宣言しており、
 // ddl-auto: update 環境で同一列に対する冗長な UNIQUE 制約/インデックスが2つ生成されていた）
 @Table(name = "categories")
+// 作成・更新・削除を監査ログ（audit_logs）へ記録する（docs/issue-analysis.md 追加所見 A.1）。
+// サービス層ではなく永続化フックに置くことで、保存経路が増えても記録漏れが起きない
+@EntityListeners(EntityAuditListener.class)
 // ゲッターを自動生成
 @Getter
 // セッターを自動生成
 @Setter
 // JPA が要求する引数なしコンストラクタを自動生成
 @NoArgsConstructor
-public class Category {
+// AuditedEntity を実装して、監査リスナが主キーを型安全に取り出せるようにする
+// （getId() は Lombok の @Getter が生成するゲッターがそのまま実装になる）
+public class Category implements AuditedEntity {
 
     // カテゴリ名の最大文字数（DB の列長・DTO の @MaxCodePoints・サービス層の正規化後再検証で共有する唯一の定義。
     // 裸の 50 を各所に散らさないよう、列長を持つドメイン側にまとめて置く。共通規約 §6 一元管理）

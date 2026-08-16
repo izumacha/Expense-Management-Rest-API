@@ -53,6 +53,7 @@ docker compose up --build        # PostgreSQL + アプリを一括起動（推�
 - `security/` — IP ベースのレート制限フィルタ（`RateLimitFilter`）。
 - `validation/` — Bean Validation 制約（`MaxCodePoints`、コードポイント単位の文字数検証）とカテゴリ名の正規化ユーティリティ（`CategoryNameNormalizer`、前後空白除去 + Unicode NFC 正規化。制約自体ではなく DTO の正規コンストラクタから呼ばれる前処理）。
 - `web/` — 横断的関心事: エラー応答の共通整形（`ApiErrorWriter`）、ページング入力の無害化（`PageableSanitizer`）、リクエスト本文サイズ上限（`RequestBodySizeLimitFilter`）。
+- `audit/` — 監査ログ（誰が・いつ・どの行に・何をしたか）。`AuditAction`（操作種別）/ `AuditActorResolver`（操作主体の解決）/ `AuditRecorder`（記録の組み立てと書き込み時期の決定）/ `AuditLogWriter`（独立トランザクションでの書き込み）/ `EntityAuditListener`（JPA の永続化フック）/ `AuthenticationAuditListener`（認証イベントの購読）。
 
 設計原則: DTO 分離、ループ内個別クエリを避ける（N+1 回避、§8）、金額は `BigDecimal`。設定は `src/main/resources/application.yml`、コンテナ化は `Dockerfile` ＋ `docker-compose.yml`、Maven ラッパーは `.mvn/wrapper/`。
 
@@ -63,6 +64,17 @@ docker compose up --build        # PostgreSQL + アプリを一括起動（推�
 - CSRF 無効はステートレス Bearer 認証（Cookie 不使用・セッション STATELESS）が前提。Cookie 認証を導入する場合は CSRF 保護を再有効化する。
 - 401/403 も既存のエラー契約 `{ "status", "message" }`（`ApiErrorWriter` / `ErrorMessages`）で返す。トークン発行の認証失敗はユーザー名・パスワードのどちらが誤りかを区別しない文言にする（ユーザー列挙防止）。
 - CORS の許可メソッド/ヘッダは最小限（GET/POST/PUT/DELETE、Authorization/Content-Type）を維持し、`allowCredentials` は false のままにする。
+- `ApiUserConfig` の `providerManager.setAuthenticationEventPublisher(...)` を外さない。これが無いと `ProviderManager` の既定の発行器は何も発行せず、**認証イベントの監査ログだけが静かに止まる**（`AuthenticationEventPublishingTest` が配線を固定している）。
+
+### 監査ログの不変条件
+
+- 監査ログ（`audit_logs`）を書くのは `audit/AuditLogWriter` **のみ**。サービス層・コントローラから `AuditLogRepository` を直接呼ばない。
+- 変更の検知は**永続化フック**（`@EntityListeners(EntityAuditListener.class)`）に寄せる。サービス層で 1 メソッドずつ記録しない（新しい保存経路での書き忘れを防ぐため）。
+- **新しいエンティティを追加したら** `AuditedEntity` の実装と `@EntityListeners(EntityAuditListener.class)` を必ず付ける（付け忘れは `AuditedEntityCoverageTest` が検出する）。
+- `Expense` / `Category` に JPQL/SQL の一括更新・削除（`@Modifying`）を導入しない。永続化コンテキストを迂回してコールバックが発火せず、監査漏れになる。必要な場合は監査記録も同時に設計する。
+- 監査ログには**値そのもの（金額・説明・カテゴリ名）を保存しない**。記録するのは「いつ・誰が・どの行に・どの操作をしたか」まで（家計情報を監査テーブルへ複製しないため）。パスワード・トークンは当然記録しない。
+- 書き込みは**コミット後・fail-open**（失敗しても業務処理を止めず WARN ログのみ）。この方針を変えるときは `docs/issue-analysis.md` の追加所見 A.1「対応の記録」も同じ PR で更新する。
+- `AuditLog` にセッターを足さない（追記専用を型のレベルで保つ）。
 
 ### CI
 

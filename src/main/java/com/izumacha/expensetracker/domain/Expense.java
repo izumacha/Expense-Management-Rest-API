@@ -1,8 +1,12 @@
 // 支出のドメインパッケージ
 package com.izumacha.expensetracker.domain;
 
+// 変更を監査ログへ記録するエンティティリスナ
+import com.izumacha.expensetracker.audit.EntityAuditListener;
 // JPA の列定義アノテーション
 import jakarta.persistence.Column;
+// エンティティリスナを紐づけるアノテーション
+import jakarta.persistence.EntityListeners;
 // JPA のエンティティ宣言用アノテーション
 import jakarta.persistence.Entity;
 // フェッチ方式の列挙
@@ -55,13 +59,18 @@ import lombok.Setter;
     @Index(name = "idx_expenses_spent_on_id", columnList = "spent_on, id"),
     @Index(name = "idx_expenses_category_id", columnList = "category_id")
 })
+// 作成・更新・削除を監査ログ（audit_logs）へ記録する（docs/issue-analysis.md 追加所見 A.1）。
+// サービス層ではなく永続化フックに置くことで、保存経路が増えても記録漏れが起きない
+@EntityListeners(EntityAuditListener.class)
 // ゲッターを自動生成
 @Getter
 // セッターを自動生成
 @Setter
 // JPA が要求する引数なしコンストラクタを自動生成
 @NoArgsConstructor
-public class Expense {
+// AuditedEntity を実装して、監査リスナが主キーを型安全に取り出せるようにする
+// （getId() は Lombok の @Getter が生成するゲッターがそのまま実装になる）
+public class Expense implements AuditedEntity {
 
     // 説明（description）に許可する最大文字数（コードポイント数）。
     // 【なぜ定数にするか】この上限は「DB 列長（@Column(length)）」と「DTO の入力検証

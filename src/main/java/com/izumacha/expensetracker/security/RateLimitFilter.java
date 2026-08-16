@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import com.izumacha.expensetracker.config.SecurityConfig;
 // 外部向けエラーメッセージ定数を参照する
 import com.izumacha.expensetracker.exception.ErrorMessages;
+// 外部由来の文字列を記録先へ書く前に無害化する共通ユーティリティ（制御文字の置換＋長さの打ち切り）
+import com.izumacha.expensetracker.validation.TextSanitizer;
 // {status, message} 形式のエラー応答を書き出す共通ユーティリティ
 import com.izumacha.expensetracker.web.ApiErrorWriter;
 // サーブレットのフィルタ連鎖を表す型
@@ -388,27 +390,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
     // 【なぜ必要か】IP 検証に落ちた候補値は任意の文字列であり、CR/LF を含めると偽のログ行を
     // 挿入できてしまい（ログ偽装）、長大な値はログ肥大による二次的な資源枯渇を招く。
     // そこで (1) 制御文字（改行・タブ・エスケープ等）を '_' に置換し、(2) 長さを
-    // LOG_VALUE_MAX_LENGTH に打ち切ってから記録する。正規表現ではなく 1 文字ずつの走査に
-    // しているのは、信頼できない入力へ正規表現を当てない方針（§9 ReDoS 回避）に揃えるため。
+    // LOG_VALUE_MAX_LENGTH に打ち切ってから記録する。
+    // 【なぜ委譲するか】同じ無害化を監査ログ（audit パッケージが認証イベントの actor を
+    // テーブルへ書く前）も必要とする。2 箇所目が現れたので規則そのものは TextSanitizer へ
+    // 一元化し、ここは「ログ用の打ち切り長を与える薄い入口」だけを担う（§6 DRY）。
+    // 打ち切り長をこちら側に残すのは、ログ行の見やすさ基準（64 文字）と DB 列長は別の関心事で、
+    // 片方を変えたときにもう片方まで動いてはいけないため。
     // 同一パッケージのテストから直接検証できるようパッケージプライベートにしている
     static String sanitizeForLog(String value) {
-        // null は文字列 "null" として返す（呼び出し元で NPE にしないための防御）
-        if (value == null) {
-            return "null";
-        }
-        // 出力する長さを上限で打ち切る（超過分はログに出さない）
-        int length = Math.min(value.length(), LOG_VALUE_MAX_LENGTH);
-        // 無害化後の文字を組み立てるバッファを用意する
-        StringBuilder sanitized = new StringBuilder(length);
-        // 打ち切り後の範囲を 1 文字ずつ走査する
-        for (int i = 0; i < length; i++) {
-            // 現在位置の文字を取り出す
-            char c = value.charAt(i);
-            // 制御文字（改行・復帰・タブ・エスケープ等の ISO 制御文字）は '_' に置換し、それ以外はそのまま残す
-            sanitized.append(Character.isISOControl(c) ? '_' : c);
-        }
-        // 無害化した文字列を返す
-        return sanitized.toString();
+        // 制御文字の置換と長さの打ち切りを共通ユーティリティへ委譲する（null は "null" が返る）
+        return TextSanitizer.sanitize(value, LOG_VALUE_MAX_LENGTH);
     }
 
     // 引数が IPv4 または IPv6 アドレスの形式に見えるかを確認する（DNS 名前解決を行わない）。
