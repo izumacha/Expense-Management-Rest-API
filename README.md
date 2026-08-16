@@ -365,7 +365,7 @@ CREATE INDEX idx_audit_logs_occurred_at ON audit_logs (occurred_at);
 CREATE INDEX idx_audit_logs_entity      ON audit_logs (entity_name, entity_id);
 ```
 
-列定義の正本は `src/main/java/com/izumacha/expensetracker/domain/AuditLog.java` です（上の DDL はそこから起こした写しなので、列を増やしたら両方を同じ PR で直してください）。適用後は `SPRING_JPA_HIBERNATE_DDL_AUTO` を既定の `validate` のまま起動し、**起動が成功すること**でスキーマとエンティティの一致を確認できます（食い違えば起動が失敗します）。
+列定義の正本は `src/main/java/com/izumacha/expensetracker/domain/AuditLog.java` です。上の DDL はそこから起こした写しなので、列やインデックスを変えたら両方を同じ PR で直してください。**写しがずれていないことは `AuditLogReadmeDdlTest` が検証する**ので、直し忘れたままだとビルドが落ちます（とくにインデックスのずれは次に述べる `validate` では検出できないため、この検証が唯一の歯止めです）。適用後は `SPRING_JPA_HIBERNATE_DDL_AUTO` を既定の `validate` のまま起動し、**起動が成功すること**でスキーマとエンティティの一致を確認できます（列が食い違えば起動が失敗します。ただし `validate` はインデックスの有無までは見ません）。
 
 ### DB バックアップ（取得）
 
