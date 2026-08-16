@@ -31,6 +31,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 // 名前で引ける解析結果を扱うインターフェース
 import java.util.Map;
+// 全テストの前に 1 度だけ実行する準備メソッドを宣言するアノテーション
+import org.junit.jupiter.api.BeforeAll;
 // テストメソッドを宣言するアノテーション
 import org.junit.jupiter.api.Test;
 
@@ -70,17 +72,42 @@ class AuditLogReadmeDdlTest {
      */
     private static final Path README_PATH = Path.of("README.md");
 
-    // 解析対象の DDL を README の中から見つけるための目印（この文字列から次のコードフェンスまでを読む）
-    private static final String DDL_START_MARKER = "CREATE TABLE audit_logs";
+    /**
+     * 解析対象の DDL を README の中から見つけるための目印。
+     *
+     * <p><b>テーブル名をここに含めない</b>のが要点。含めてしまうと、README のテーブル名を変えた
+     * ときにブロックが見つからず「README に DDL が無い」という的外れな失敗になるか、前方一致で
+     * 別名（{@code audit_logs_v2} など）を掴んで<b>素通りする</b>。テーブル名は正本（{@code @Table}）
+     * から取り、それと一致する文を探す方式にする（{@link #readDdlBlock()}）。
+     */
+    private static final String CREATE_TABLE_MARKER = "CREATE TABLE";
 
     // Markdown のコードフェンス（DDL ブロックの終わりを示す）
     private static final String CODE_FENCE = "```";
 
-    // 個々の CREATE INDEX 文を見つけるための目印
-    private static final String CREATE_INDEX_MARKER = "CREATE INDEX";
+    // インデックス定義の文であることを見分けるための接頭辞（一意インデックスは UNIQUE が挟まる）
+    private static final String CREATE_MARKER = "CREATE";
+
+    // 一意インデックスであることを示す語
+    private static final String UNIQUE_MARKER = "UNIQUE";
+
+    // インデックス定義であることを示す語
+    private static final String INDEX_MARKER = "INDEX";
 
     // @Column の length 属性の既定値（JPA 仕様。属性を書かなかった列の期待長として使う）
     private static final int DEFAULT_COLUMN_LENGTH = 255;
+
+    /**
+     * README から読み取って解析した DDL（列定義）。
+     *
+     * <p>README は 1 回の実行中に変わらないため、テストごとに読み直さず {@link #parseReadmeDdl()} で
+     * 一度だけ読み解く。読み取り・解析の失敗も 1 回の明確なエラーとして出る（各テストで 5 回
+     * 同じ失敗が並ばない）。
+     */
+    private static Map<String, DdlColumn> ddlColumns;
+
+    // README から読み取って解析した DDL（インデックス定義）
+    private static List<DdlIndex> ddlIndexes;
 
     /**
      * README の DDL から読み取った 1 列分の定義。
@@ -95,12 +122,13 @@ class AuditLogReadmeDdlTest {
     }
 
     /**
-     * README の DDL から読み取った 1 つ分のインデックス定義。
+     * インデックス 1 つ分の定義（README 側の読み取り結果と、エンティティ側の期待値の両方に使う）。
      *
      * @param name    インデックス名（小文字に正規化済み）
      * @param columns 対象の列名（小文字に正規化済み・定義された順）
+     * @param unique  一意インデックス（{@code CREATE UNIQUE INDEX}）か
      */
-    private record DdlIndex(String name, List<String> columns) {
+    private record DdlIndex(String name, List<String> columns, boolean unique) {
     }
 
     /**
@@ -118,7 +146,15 @@ class AuditLogReadmeDdlTest {
     // README 側の読み取り
     // ------------------------------------------------------------------
 
-    /** README から DDL のコードブロック（CREATE TABLE ＋ CREATE INDEX）だけを切り出して返す。 */
+    /**
+     * README から DDL のコードブロック（CREATE TABLE ＋ CREATE INDEX）だけを切り出して返す。
+     *
+     * <p><b>探し方</b>: README 中の {@code CREATE TABLE} をすべて見て、テーブル名が正本
+     * （{@code AuditLog} の {@code @Table}）と<b>完全一致</b>する文を採用する。README に別のテーブルの
+     * DDL が増えても取り違えず、逆に README 側でテーブル名を変えた（＝正本とずれた）場合は
+     * 「見つからない」として落ちる。前方一致で探すと {@code audit_logs_v2} のような別名を掴んで
+     * しまい、テーブル名のずれを検出できなくなる。
+     */
     private static String readDdlBlock() {
         // README を読む（存在しない・読めないのは環境の異常なので握り潰さず失敗させる。§6）
         String readme;
@@ -129,25 +165,53 @@ class AuditLogReadmeDdlTest {
             // どのファイルが読めなかったかを添えて停止する
             throw new IllegalStateException("README を読み取れません: " + README_PATH.toAbsolutePath(), e);
         }
-        // DDL の開始位置（CREATE TABLE audit_logs）を探す
-        int start = readme.indexOf(DDL_START_MARKER);
-        // 見つからなければ README 側から DDL が消えている（＝適用手順が失われている）ので失敗させる
-        assertThat(start)
-                // 失敗時に何が起きたかと直し方を示す
-                .as("README に「%s」が見つかりません（本番へ手動適用する DDL が失われていないか確認してください）",
-                        DDL_START_MARKER)
-                // 見つかった位置は 0 以上になる
-                .isNotNegative();
-        // DDL ブロックの終わり（次のコードフェンス）を探す
-        int end = readme.indexOf(CODE_FENCE, start);
-        // 閉じフェンスが無ければ Markdown が壊れているので失敗させる
-        assertThat(end)
-                // 失敗時に何が起きたかを示す
-                .as("README の DDL ブロックを閉じるコードフェンス（%s）が見つかりません", CODE_FENCE)
-                // 見つかった位置は 0 以上になる
-                .isNotNegative();
-        // 開始位置から閉じフェンスの手前までを DDL 本体として返す
-        return readme.substring(start, end);
+        // 正本のテーブル名を取り出す（この名前の CREATE TABLE だけを採用する）
+        String expectedTable = tableAnnotation().name();
+        // 最初の CREATE TABLE を探す
+        int cursor = readme.indexOf(CREATE_TABLE_MARKER);
+        // 見つからなくなるまで 1 文ずつ確認する
+        while (cursor >= 0) {
+            // 列定義を囲む丸括弧の開き位置を探す（テーブル名はこの手前にある）
+            int paren = readme.indexOf('(', cursor);
+            // 開き括弧が無ければこれ以上たどれないので打ち切る
+            if (paren < 0) {
+                // 探索を終える
+                break;
+            }
+            // 「CREATE TABLE」と開き括弧の間にある語をテーブル名として取り出す
+            String tableName = readme.substring(cursor + CREATE_TABLE_MARKER.length(), paren).trim();
+            // 正本と完全に一致したらこの文が目的の DDL
+            if (tableName.equals(expectedTable)) {
+                // DDL ブロックの終わり（次のコードフェンス）を探す
+                int end = readme.indexOf(CODE_FENCE, cursor);
+                // 閉じフェンスが無ければ Markdown が壊れているので失敗させる
+                assertThat(end)
+                        // 失敗時に何が起きたかを示す
+                        .as("README の DDL ブロックを閉じるコードフェンス（%s）が見つかりません", CODE_FENCE)
+                        // 見つかった位置は 0 以上になる
+                        .isNotNegative();
+                // 開始位置から閉じフェンスの手前までを DDL 本体として返す
+                return readme.substring(cursor, end);
+            }
+            // 一致しなければ次の CREATE TABLE を探す
+            cursor = readme.indexOf(CREATE_TABLE_MARKER, cursor + CREATE_TABLE_MARKER.length());
+        }
+        // 正本のテーブル名を持つ DDL が無い＝本番への適用手順が失われている（またはテーブル名がずれた）
+        throw new IllegalStateException(
+                // 何が無くて、どう直せばよいかを示す
+                "README に「" + CREATE_TABLE_MARKER + " " + expectedTable + "」が見つかりません"
+                        + "（本番へ手動適用する DDL が失われていないか、テーブル名が @Table とずれていないか確認してください）");
+    }
+
+    /** README を 1 度だけ読み解き、以降のテストが使う解析結果を用意する。 */
+    @BeforeAll
+    static void parseReadmeDdl() {
+        // README から DDL ブロックを切り出す
+        String ddl = readDdlBlock();
+        // 列定義を解析して保持する
+        ddlColumns = parseColumns(ddl);
+        // インデックス定義を解析して保持する
+        ddlIndexes = parseIndexes(ddl);
     }
 
     /** DDL の {@code CREATE TABLE} 部分を解析し、列名から定義を引ける形にして返す。 */
@@ -213,43 +277,73 @@ class AuditLogReadmeDdlTest {
         return columns;
     }
 
-    /** DDL の {@code CREATE INDEX} 文をすべて解析して返す。 */
+    /**
+     * DDL のインデックス定義（{@code CREATE INDEX} / {@code CREATE UNIQUE INDEX}）をすべて解析して返す。
+     *
+     * <p>一意インデックスも読めるようにしてあるのは、{@code @Index(unique = true)} を足したときに
+     * 正しい README の書き方（{@code CREATE UNIQUE INDEX}）がこの検証を通せないと、<b>まっとうな
+     * スキーマ変更のたびにテスト側を直さないと進めなくなる</b>ため。逆向き（README にだけ
+     * 一意インデックスが残る）も見逃さない。
+     */
     private static List<DdlIndex> parseIndexes(String ddl) {
         // 解析結果を集める入れ物
         List<DdlIndex> indexes = new ArrayList<>();
-        // 最初の CREATE INDEX を探す
-        int cursor = ddl.indexOf(CREATE_INDEX_MARKER);
-        // 見つからなくなるまで 1 文ずつ処理する
-        while (cursor >= 0) {
+        // 対象のテーブル名（インデックスが別のテーブルに向いていないかの確認に使う）
+        String expectedTable = tableAnnotation().name();
+        // CREATE TABLE の列定義を読み飛ばすため、その閉じ括弧の位置を求める
+        int tableClose = matchingParenthesis(ddl, ddl.indexOf('('));
+        // 閉じ括弧より後ろ（インデックス定義が並ぶ範囲）を「;」で文に分けて 1 つずつ処理する
+        for (String rawStatement : ddl.substring(tableClose).split(";")) {
+            // 前後の空白を落とす
+            String statement = rawStatement.trim();
+            // インデックス定義でない断片（閉じ括弧だけの行など）は飛ばす
+            if (!statement.toUpperCase().startsWith(CREATE_MARKER)) {
+                // 次の文へ進む
+                continue;
+            }
             // 対象列を囲む丸括弧の開き位置を探す
-            int open = ddl.indexOf('(', cursor);
+            int open = statement.indexOf('(');
             // 開き括弧が無ければ文の形が想定と違うので失敗させる
             assertThat(open)
-                    // 失敗時に何が起きたかを示す
-                    .as("CREATE INDEX の対象列を囲む丸括弧が見つかりません")
+                    // 失敗時にどの文でつまずいたかを示す
+                    .as("インデックス定義の対象列を囲む丸括弧が見つかりません: %s", statement)
                     // 見つかった位置は 0 以上になる
                     .isNotNegative();
             // 開き括弧に対応する閉じ括弧を探す
-            int close = matchingParenthesis(ddl, open);
-            // 「CREATE INDEX <名前> ON <テーブル>」の部分を語に分ける
-            String[] head = ddl.substring(cursor, open).trim().split("\\s+");
-            // CREATE / INDEX / 名前 / ON / テーブル名 の 5 語が必要
+            int close = matchingParenthesis(statement, open);
+            // 「CREATE [UNIQUE] INDEX <名前> ON <テーブル>」の部分を語に分ける
+            String[] head = statement.substring(0, open).trim().split("\\s+");
+            // 2 語目が UNIQUE なら一意インデックス（以降の語の位置が 1 つずれる）
+            boolean unique = head.length > 1 && head[1].equalsIgnoreCase(UNIQUE_MARKER);
+            // UNIQUE の有無による語の位置ずれ
+            int offset = unique ? 1 : 0;
+            // CREATE / [UNIQUE] / INDEX / 名前 / ON / テーブル名 の語数を検証する
             assertThat(head.length)
                     // 失敗時にどの文でつまずいたかを示す
-                    .as("CREATE INDEX 文を解析できません: %s", String.join(" ", head))
-                    // 5 語あることを検証する
-                    .isEqualTo(5);
+                    .as("インデックス定義を解析できません: %s", statement)
+                    // UNIQUE の有無に応じた語数であることを検証する
+                    .isEqualTo(5 + offset);
+            // 3 語目（UNIQUE があれば 4 語目）が INDEX であることを検証する
+            assertThat(head[1 + offset])
+                    // 失敗時にどの文でつまずいたかを示す
+                    .as("インデックス定義として解釈できない文です: %s", statement)
+                    // INDEX という語であることを検証する
+                    .isEqualToIgnoringCase(INDEX_MARKER);
+            // インデックスが正本のテーブルに向いていることを検証する
+            assertThat(head[4 + offset])
+                    // 失敗時にどのテーブルへ向いていたかを示す
+                    .as("インデックス %s が別のテーブルに向いています: %s", head[2 + offset], statement)
+                    // 対象テーブル名が一致することを検証する
+                    .isEqualTo(expectedTable);
             // 対象列の一覧を組み立てる入れ物
             List<String> indexColumns = new ArrayList<>();
             // 括弧の内側をカンマで区切って 1 列ずつ加える
-            for (String column : splitTopLevel(ddl.substring(open + 1, close))) {
+            for (String column : splitTopLevel(statement.substring(open + 1, close))) {
                 // 前後の空白を落とし小文字にそろえて加える
                 indexColumns.add(column.trim().toLowerCase());
             }
-            // 解析した 1 つ分を入れ物へ加える（3 語目がインデックス名）
-            indexes.add(new DdlIndex(head[2].toLowerCase(), indexColumns));
-            // 次の CREATE INDEX を探す
-            cursor = ddl.indexOf(CREATE_INDEX_MARKER, close);
+            // 解析した 1 つ分を入れ物へ加える
+            indexes.add(new DdlIndex(head[2 + offset].toLowerCase(), indexColumns, unique));
         }
         // 解析結果を返す
         return indexes;
@@ -445,35 +539,27 @@ class AuditLogReadmeDdlTest {
     // 解析そのものが機能していること（空振りで素通りしていないこと）を検証する
     @Test
     void READMEのDDLを解析できている() {
-        // README から DDL ブロックを切り出す
-        String ddl = readDdlBlock();
         // 列定義が読み取れていることを検証する。
         // 【なぜ先に確かめるか】解析に失敗して 0 件になると、以降の「全部そろっている」検証が
-        // 「対象なし」で常に成功し、検出網そのものが死んでいることに気付けなくなる
-        assertThat(parseColumns(ddl))
+        // 「対象なし」で常に成功し、検出網そのものが死んでいることに気付けなくなる。
+        // なお、正本のテーブル名を持つ CREATE TABLE が README に無い場合は、この時点より前
+        // （readDdlBlock）で明示的に失敗している
+        assertThat(ddlColumns)
                 // 失敗時に何が起きたかを示す
                 .as("README の DDL から列定義を読み取れませんでした")
                 // 少なくとも 1 列は読み取れていることを検証する
                 .isNotEmpty();
         // インデックス定義も読み取れていることを検証する
-        assertThat(parseIndexes(ddl))
+        assertThat(ddlIndexes)
                 // 失敗時に何が起きたかを示す
-                .as("README の DDL から CREATE INDEX を読み取れませんでした")
+                .as("README の DDL からインデックス定義を読み取れませんでした")
                 // 少なくとも 1 つは読み取れていることを検証する
                 .isNotEmpty();
-        // DDL のテーブル名がエンティティ側の宣言と一致していることを検証する
-        assertThat(DDL_START_MARKER)
-                // 失敗時に何が起きたかを示す
-                .as("README の DDL のテーブル名が @Table の宣言と一致していません")
-                // 「CREATE TABLE <テーブル名>」の形で一致していることを検証する
-                .isEqualTo("CREATE TABLE " + tableAnnotation().name());
     }
 
     // エンティティの全列が README の DDL に同じ型・同じ NULL 可否で載っていることを検証する
     @Test
     void READMEのDDLがエンティティの全列を同じ定義で持つ() {
-        // README から列定義を読み取る
-        Map<String, DdlColumn> ddlColumns = parseColumns(readDdlBlock());
         // エンティティ側の期待値を 1 列ずつ突き合わせる
         for (ExpectedColumn expected : expectedColumns()) {
             // 同名の列を README 側から探す
@@ -506,8 +592,6 @@ class AuditLogReadmeDdlTest {
     // README の DDL にエンティティが持たない列が紛れていないことを検証する
     @Test
     void READMEのDDLに余分な列が無い() {
-        // README 側の列名を読み取る
-        Map<String, DdlColumn> ddlColumns = parseColumns(readDdlBlock());
         // エンティティ側の列名を組み立てる
         List<String> expectedNames = expectedColumns().stream().map(ExpectedColumn::name).toList();
         // 【なぜ余分も見るか】列を削ったのに README に残っていると、validate では検出されず
@@ -522,8 +606,6 @@ class AuditLogReadmeDdlTest {
     // 主キーが自動採番の識別列として定義されていることを検証する
     @Test
     void READMEのDDLの主キーが自動採番の識別列になっている() {
-        // README 側の列定義を読み取る
-        Map<String, DdlColumn> ddlColumns = parseColumns(readDdlBlock());
         // エンティティ側で主キーとされている列を探す
         ExpectedColumn idColumn = expectedColumns().stream()
                 // 主キーの列だけに絞る
@@ -534,6 +616,15 @@ class AuditLogReadmeDdlTest {
                 .orElseThrow(() -> new IllegalStateException("AuditLog に @Id の列がありません"));
         // README 側の同名の列を取り出す
         DdlColumn actual = ddlColumns.get(idColumn.name());
+        // 列そのものが載っていることを先に検証する。
+        // 【なぜ先に見るか】無いまま次の行で参照すると、直し方の書かれていない NullPointerException が
+        // 出るだけになり、読み手はスタックトレースから原因を推測することになる
+        assertThat(actual)
+                // 失敗時にどの列が抜けているかと直し方を示す
+                .as("README の DDL に主キーの列 %s がありません（AuditLog の @Id を README にも反映してください）",
+                        idColumn.name())
+                // 列が存在することを検証する
+                .isNotNull();
         // 主キー指定が付いていることを検証する
         assertThat(actual.primaryKey())
                 // 失敗時に何が足りないかを示す
@@ -555,8 +646,6 @@ class AuditLogReadmeDdlTest {
     // エンティティが宣言するインデックスが README の DDL と過不足なく一致することを検証する
     @Test
     void READMEのDDLがエンティティの全インデックスを過不足なく持つ() {
-        // README 側のインデックス定義を読み取る
-        List<DdlIndex> ddlIndexes = parseIndexes(readDdlBlock());
         // エンティティ側の期待値を組み立てる入れ物
         List<DdlIndex> expected = new ArrayList<>();
         // @Table のインデックス宣言を 1 つずつ期待値へ変換する
@@ -568,8 +657,8 @@ class AuditLogReadmeDdlTest {
                 // 前後の空白を落とし小文字にそろえて加える
                 indexColumns.add(column.trim().toLowerCase());
             }
-            // 期待値を 1 件加える
-            expected.add(new DdlIndex(index.name().toLowerCase(), indexColumns));
+            // 期待値を 1 件加える（一意指定の有無も比較対象に含める）
+            expected.add(new DdlIndex(index.name().toLowerCase(), indexColumns, index.unique()));
         }
         // 【なぜ過不足の両方を見るか】ddl-auto: validate はインデックスを検証しないため、
         // ここでずれても本番は起動してしまう。追記漏れは全件走査に、消し忘れは不要な
