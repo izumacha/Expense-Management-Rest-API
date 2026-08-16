@@ -365,7 +365,7 @@ CREATE INDEX idx_audit_logs_occurred_at ON audit_logs (occurred_at);
 CREATE INDEX idx_audit_logs_entity      ON audit_logs (entity_name, entity_id);
 ```
 
-列定義の正本は `src/main/java/com/izumacha/expensetracker/domain/AuditLog.java` です（上の DDL はそこから起こした写しなので、列を増やしたら両方を同じ PR で直してください）。適用後は `SPRING_JPA_HIBERNATE_DDL_AUTO` を既定の `validate` のまま起動し、**起動が成功すること**でスキーマとエンティティの一致を確認できます（食い違えば起動が失敗します）。
+列定義の正本は `src/main/java/com/izumacha/expensetracker/domain/AuditLog.java` です。上の DDL はそこから起こした写しなので、列やインデックスを変えたら両方を同じ PR で直してください。**写しがずれていないことは `AuditLogReadmeDdlTest` が検証する**ので、直し忘れたままだとビルドが落ちます（とくにインデックスのずれは次に述べる `validate` では検出できないため、この検証が唯一の歯止めです）。この検証が読めるのは上の DDL と同じ範囲——列・主キー・識別列・インデックスまでで、**それ以外の記述（列や表に付ける UNIQUE / CHECK、`ALTER TABLE`、索引の並び順や演算子クラスなど）が現れると、素通りさせずビルドを落とします**（正本と突き合わせられないものを黙って見逃すと、たとえばエンティティに無い一意制約が本番だけに入り、監査記録が静かに欠けるため）。必要になったら検証側を先に広げてください。適用後は `SPRING_JPA_HIBERNATE_DDL_AUTO` を既定の `validate` のまま起動し、**起動が成功すること**でスキーマとエンティティの一致を確認できます（列が食い違えば起動が失敗します。ただし `validate` はインデックスの有無までは見ません）。
 
 ### DB バックアップ（取得）
 
@@ -812,14 +812,14 @@ A minimal runbook for running the app with `docker compose`.
 
 ### Inspecting and retaining logs
 
-Application logs (errors, rate-limit warnings, etc.) go to the **container's standard output**. To trace who changed what and when, use the **audit log table** in the database (`audit_logs`, see "Inspecting the audit log" below) rather than the application log.
+Application logs (errors, rate-limit warnings, etc.) go to the **container's standard output**. To trace who changed what and when, use the **audit log table** in the database (`audit_logs`, see [監査ログの確認](#監査ログの確認) — the DDL and query examples are kept in one place to avoid a second copy drifting) rather than the application log.
 
 ```bash
 docker compose logs -f app     # follow the application log
 docker compose logs -f db      # follow the PostgreSQL log
 ```
 
-Note first that **authentication outcomes never reach the application log.** A failed token request returns 401 without emitting a log line (`GlobalExceptionHandler#handleAuthenticationFailure`), and successes are equally silent. Authentication events are recorded in the `audit_logs` table instead, so that is where a brute-force run against `POST /api/auth/token` is detected and evidenced (see "Inspecting the audit log" below). What does reach the application log today is mainly server errors (5xx) and a rate-limit warning when the tracked-client cap is hit.
+Note first that **authentication outcomes never reach the application log.** A failed token request returns 401 without emitting a log line (`GlobalExceptionHandler#handleAuthenticationFailure`), and successes are equally silent. Authentication events are recorded in the `audit_logs` table instead, so that is where a brute-force run against `POST /api/auth/token` is detected and evidenced (see [監査ログの確認](#監査ログの確認)). What does reach the application log today is mainly server errors (5xx) and a rate-limit warning when the tracked-client cap is hit.
 
 Container logs grow without bound by default, so start by configuring rotation to protect the disk. **Rotation is per-service, so apply the same block to `db` as well as `app`** — PostgreSQL records every failed connection and error, and left unbounded it will fill the host disk and take the database down with it:
 
@@ -930,7 +930,7 @@ docker compose stop app \
 This repository is an MVP. The following are **intentionally not implemented** and tracked as future work.
 
 - **Multi-user support / per-owner data isolation**: JWT authentication (issued via `POST /api/auth/token`) now protects every endpoint, but the API user is a **single user** configured through environment variables. Registering multiple users and isolating data per owner (whose expense is whose) are not implemented, and must be added before a multi-user launch.
-- **Scope of the audit log**: The audit table (`audit_logs`) is in place and records create/update/delete on expenses and categories plus authentication events (token issuance success/failure) — see "Inspecting the audit log" above. Its scope is deliberately narrow, though: **(1) it does not store value diffs** (it records that expense 12 was updated, not that the amount went from X to Y — household data is intentionally not duplicated into the audit table); **(2) writes are fail-open**, so the API still succeeds if the audit write fails (a gap only shows up as a WARN in the application log); **(3) there is no read API** (query the database directly); and **(4) there is no automatic retention** (rows accumulate). See finding A.1 in `docs/issue-analysis.md` for the reasoning.
+- **Scope of the audit log**: The audit table (`audit_logs`) is in place and records create/update/delete on expenses and categories plus authentication events (token issuance success/failure) — see [監査ログの確認](#監査ログの確認). Its scope is deliberately narrow, though: **(1) it does not store value diffs** (it records that expense 12 was updated, not that the amount went from X to Y — household data is intentionally not duplicated into the audit table); **(2) writes are fail-open**, so the API still succeeds if the audit write fails (a gap only shows up as a WARN in the application log); **(3) there is no read API** (query the database directly); and **(4) there is no automatic retention** (rows accumulate). See finding A.1 in `docs/issue-analysis.md` for the reasoning.
 
 ---
 
