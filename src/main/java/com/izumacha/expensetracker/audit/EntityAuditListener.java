@@ -45,6 +45,17 @@ public class EntityAuditListener {
     private final ObjectProvider<AuditRecorder> auditRecorderProvider;
 
     /**
+     * 一度解決した記録先を覚えておく場所。
+     *
+     * <p>プロバイダは「生成時点では依存が揃っていない」問題を避けるためだけに必要で、最初の
+     * コールバックが起きる頃には対象は生成済みの単一 Bean に定まっている。それでも毎回
+     * プロバイダから引くと、保存・更新・削除のたびに DI コンテナの解決処理をやり直すことになる。
+     * 複数スレッドが同時に初回を通ると解決が 2 回走ることがあるが、得られるのは同じ Bean なので
+     * 実害は無い（そのため二重チェックのロックは置かない）。
+     */
+    private volatile AuditRecorder cachedAuditRecorder;
+
+    /**
      * 依存を遅延解決するプロバイダを受け取る。
      *
      * <p>このクラスは Spring の {@code @Component} ではなく、JPA の実装（Hibernate）が
@@ -97,6 +108,23 @@ public class EntityAuditListener {
     }
 
     /**
+     * 記録先を返す。初回だけプロバイダから解決し、以降は覚えておいたものを使う。
+     */
+    private AuditRecorder auditRecorder() {
+        // 覚えてある記録先を取り出す（初回は null）
+        AuditRecorder resolved = cachedAuditRecorder;
+        // まだ解決していなければプロバイダから取得して覚えておく
+        if (resolved == null) {
+            // DI コンテナから記録先を解決する
+            resolved = auditRecorderProvider.getObject();
+            // 次回以降のために覚えておく
+            cachedAuditRecorder = resolved;
+        }
+        // 解決済みの記録先を返す
+        return resolved;
+    }
+
+    /**
      * 共通の記録処理。3 つのコールバックが同じ手順を踏むためここへまとめる（§6 DRY）。
      *
      * <p>ここで例外を外へ出さないのは、監査の失敗で業務処理（保存そのもの）を巻き添えに
@@ -117,7 +145,7 @@ public class EntityAuditListener {
         // 記録を試みる
         try {
             // 監査ログ記録コンポーネントを取得し、変更を記録する（実際の書き込みはコミット後）
-            auditRecorderProvider.getObject().recordEntityChange(auditedEntity, action);
+            auditRecorder().recordEntityChange(auditedEntity, action);
         } catch (RuntimeException e) {
             // 記録コンポーネントを取得できない等の異常でも保存処理は止めず、警告だけ残す
             log.warn("監査ログの記録を開始できませんでした（処理は継続します）: type={}, action={}",

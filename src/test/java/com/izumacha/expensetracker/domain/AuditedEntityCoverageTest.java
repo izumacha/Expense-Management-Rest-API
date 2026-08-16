@@ -120,6 +120,29 @@ class AuditedEntityCoverageTest {
         }
     }
 
+    // 全エンティティの単純クラス名が entity_name 列に収まることを検証する
+    @Test
+    void 全エンティティのクラス名が列長に収まる() {
+        // 走査で見つかった全エンティティを 1 件ずつ確認する
+        for (Class<?> entityClass : findEntityClasses()) {
+            // 監査ログ自身は記録対象ではないので飛ばす
+            if (entityClass.equals(AUDIT_LOG_ENTITY)) {
+                // 次のエンティティへ進む
+                continue;
+            }
+            // 単純クラス名がそのまま entity_name 列に入るため、列長に収まることを検証する。
+            // 【なぜ機械的に確かめるか】超えると、そのエンティティの記録だけが保存時に落ちる。
+            // 監査の書き込みは fail-open なので実行時には WARN が出るだけで API は正常に見え、
+            // 「このテーブルだけ監査されていない」という、まさにこの検出網が防ぎたい状態になる
+            assertThat(entityClass.getSimpleName())
+                    // 失敗時にどのクラスで超えたかを示す
+                    .as("%s のクラス名が entity_name 列の長さ（%d）を超えています",
+                            entityClass.getSimpleName(), AuditLog.ENTITY_NAME_MAX_LENGTH)
+                    // 列長以下であることを検証する
+                    .hasSizeLessThanOrEqualTo(AuditLog.ENTITY_NAME_MAX_LENGTH);
+        }
+    }
+
     // 監査ログ自身を除く全エンティティに監査リスナが紐づいていることを検証する
     @Test
     void 全エンティティに監査リスナが紐づいている() {

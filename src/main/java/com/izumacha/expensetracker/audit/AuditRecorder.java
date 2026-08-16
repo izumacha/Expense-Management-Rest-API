@@ -9,6 +9,10 @@ import com.izumacha.expensetracker.domain.AuditedEntity;
 import com.izumacha.expensetracker.validation.TextSanitizer;
 // 記録時刻に使う日時型
 import java.time.LocalDateTime;
+// トランザクションごとの記録候補を溜める入れ物
+import java.util.ArrayList;
+// 記録候補の一覧を扱うインターフェース
+import java.util.List;
 // ログ出力に使うロガー本体
 import org.slf4j.Logger;
 // ロガーを生成するファクトリ
@@ -72,6 +76,13 @@ public class AuditRecorder {
      * 環境変数で運用者が決める値なので、その名前を避ければ実務上の曖昧さは生じない。
      */
     public static final String UNKNOWN_ACTOR = "(unknown)";
+
+    /**
+     * トランザクションごとの記録候補（まだ書いていない監査ログ）を結び付けるときの鍵。
+     *
+     * <p>他の用途と衝突しないよう、この場でしか作られないオブジェクトを鍵に使う。
+     */
+    private static final Object PENDING_AUDIT_LOGS_KEY = new Object();
 
     // 監査ログを独立トランザクションで書き込むコンポーネント
     private final AuditLogWriter auditLogWriter;
@@ -141,7 +152,7 @@ public class AuditRecorder {
                 // 操作が起きた日時
                 LocalDateTime.now());
         // 認証はトランザクションの外で起きるため、予約せずその場で書き込む
-        writeQuietly(auditLog);
+        writeQuietly(List.of(auditLog));
     }
 
     /**
@@ -164,25 +175,63 @@ public class AuditRecorder {
     /**
      * トランザクションのコミット後に書き込むよう予約する。トランザクションが無い場合は
      * 待つ相手がいないのでその場で書き込む（記録を落とさないため）。
+     *
+     * <p><b>1 トランザクションにつき書き込みは 1 回にまとめる。</b> 記録を予約するたびに
+     * コールバックを登録すると、N 件の行を触った処理で N 回の独立トランザクションが走り、
+     * そのぶん DB 接続の借用も増える（{@link AuditLogWriter} の説明を参照）。
+     * 最初の予約のときだけ入れ物をトランザクションへ結び付けてコールバックを 1 つ登録し、
+     * 2 件目以降は同じ入れ物へ積むだけにする。
      */
     private void scheduleAfterCommit(AuditLog auditLog) {
         // トランザクション同期が有効でなければ、コミットを待つ手段が無いのでその場で書く
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            // その場で書き込む
-            writeQuietly(auditLog);
+            // その場で 1 件だけ書き込む
+            writeQuietly(List.of(auditLog));
             // 予約は不要なのでここで終える
             return;
         }
-        // コミット後に呼ばれるコールバックを現在のトランザクションへ登録する。
-        // ロールバックされた場合 afterCommit は呼ばれないため、記録は自動的に見送られる
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            // トランザクションのコミットが完了した後に呼ばれる
-            @Override
-            public void afterCommit() {
-                // 監査ログを書き込む（失敗しても業務処理には影響させない）
-                writeQuietly(auditLog);
-            }
-        });
+        // このトランザクションに既に結び付けてある入れ物を取り出す（初回は null）
+        List<AuditLog> pending = pendingAuditLogs();
+        // まだ無ければ、入れ物を作ってトランザクションへ結び付け、コールバックを 1 つだけ登録する
+        if (pending == null) {
+            // このトランザクションぶんの記録候補を溜める入れ物を作る
+            pending = new ArrayList<>();
+            // 同じトランザクションの後続の予約から見つけられるよう結び付ける
+            TransactionSynchronizationManager.bindResource(PENDING_AUDIT_LOGS_KEY, pending);
+            // コールバックから参照するために実効的に final な参照を用意する
+            List<AuditLog> batch = pending;
+            // コミット後に呼ばれるコールバックを現在のトランザクションへ登録する。
+            // ロールバックされた場合 afterCommit は呼ばれないため、記録は自動的に見送られる
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                // トランザクションのコミットが完了した後に呼ばれる
+                @Override
+                public void afterCommit() {
+                    // 溜まった監査ログをまとめて書き込む（失敗しても業務処理には影響させない）
+                    writeQuietly(batch);
+                }
+
+                // コミット・ロールバックのどちらでも最後に呼ばれる
+                @Override
+                public void afterCompletion(int status) {
+                    // 入れ物の結び付けを解く。スレッドは使い回されるため、ここで外さないと
+                    // 次にこのスレッドが処理するトランザクションへ前回の入れ物が残ってしまう
+                    TransactionSynchronizationManager.unbindResourceIfPossible(PENDING_AUDIT_LOGS_KEY);
+                }
+            });
+        }
+        // 記録候補を入れ物へ積む（実際の書き込みはコミット後にまとめて行う）
+        pending.add(auditLog);
+    }
+
+    /**
+     * 現在のトランザクションに結び付けてある記録候補の入れ物を返す（無ければ {@code null}）。
+     *
+     * <p>結び付けた型は自分たちしか触らないため、取り出し時の型変換は安全であることが分かっている。
+     */
+    @SuppressWarnings("unchecked")
+    private static List<AuditLog> pendingAuditLogs() {
+        // トランザクションへ結び付けた入れ物を取り出して返す
+        return (List<AuditLog>) TransactionSynchronizationManager.getResource(PENDING_AUDIT_LOGS_KEY);
     }
 
     /**
@@ -192,15 +241,31 @@ public class AuditRecorder {
      * （黙って捨てない。§6 エラーを握り潰さない）。メッセージには操作の種類までしか含めず、
      * 例外はスタックトレース付きで<b>サーバ内ログにのみ</b>出す（§9）。
      */
-    private void writeQuietly(AuditLog auditLog) {
+    private void writeQuietly(List<AuditLog> auditLogs) {
         // 書き込みを試みる
         try {
-            // 独立したトランザクションで 1 行保存する
-            auditLogWriter.write(auditLog);
+            // 独立したトランザクションでまとめて保存する
+            auditLogWriter.write(auditLogs);
         } catch (RuntimeException e) {
-            // 失敗しても業務処理は続行し、記録が落ちたことだけを警告として残す
-            log.warn("監査ログの記録に失敗しました（処理は継続します）: entityName={}, action={}",
-                    auditLog.getEntityName(), auditLog.getAction(), e);
+            // 失敗しても業務処理は続行し、記録が落ちたことだけを警告として残す。
+            // 件数と種別までを出し、値そのもの（actor 等）は出さない（§9）
+            log.warn("監査ログの記録に失敗しました（処理は継続します）: 件数={}, 対象={}",
+                    auditLogs.size(), describeForLog(auditLogs), e);
         }
+    }
+
+    /**
+     * 警告ログ用に「どの種類の・どの操作が落ちたか」だけを組み立てる。
+     *
+     * <p>actor（外部由来の値を含みうる）は出さない。運用者が知りたいのは「何の記録が落ちたか」で
+     * あって主体名ではなく、ログへ余計な外部入力を運ばないほうが安全なため（§9）。
+     */
+    private static String describeForLog(List<AuditLog> auditLogs) {
+        // 「種類:操作」の組をカンマ区切りで並べた文字列を組み立てて返す
+        return auditLogs.stream()
+                // 1 件ごとに「種類:操作」の形へ変換する
+                .map(auditLog -> auditLog.getEntityName() + ":" + auditLog.getAction())
+                // カンマ区切りで 1 つの文字列にまとめる
+                .collect(java.util.stream.Collectors.joining(", "));
     }
 }

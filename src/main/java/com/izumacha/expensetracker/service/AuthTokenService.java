@@ -106,9 +106,6 @@ public class AuthTokenService {
     public TokenResponse issueToken(TokenRequest request) {
         // 認証結果を受け取る変数を宣言する（成功時のみ値が入る）
         var authentication = authenticate(request);
-        // 認証に成功したのでログイン成功を監査ログへ記録する。
-        // 記録するのは認証済みの主体名だけで、パスワードは渡さない（§9）
-        auditRecorder.recordAuthentication(AuditAction.LOGIN_SUCCESS, authentication.getName());
         // トークンの発行時刻として現在時刻を取得する
         Instant issuedAt = Instant.now();
         // JWT のクレーム（トークンの中身）を組み立てる
@@ -127,6 +124,12 @@ public class AuthTokenService {
         JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
         // ヘッダとクレームを署名して JWT 文字列を生成する
         String token = jwtEncoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
+        // トークンの生成まで終えたのでログイン成功を監査ログへ記録する。
+        // 【なぜ照合の直後ではなくここか】この行は「トークンが発行された証拠」として読まれる。
+        // 署名に失敗する（鍵の入れ替えミス等）と 500 になりトークンは渡らないため、照合直後に
+        // 記録すると「発行されていないのに成功として残る」記録になってしまう。
+        // 記録するのは認証済みの主体名だけで、パスワードは渡さない（§9）
+        auditRecorder.recordAuthentication(AuditAction.LOGIN_SUCCESS, authentication.getName());
         // トークンと有効期間（秒）を DTO に詰めて返す
         return new TokenResponse(token, TOKEN_TTL_SECONDS);
     }

@@ -5,6 +5,8 @@ package com.izumacha.expensetracker.audit;
 import com.izumacha.expensetracker.domain.AuditLog;
 // 監査ログの永続化を担うリポジトリ
 import com.izumacha.expensetracker.repository.AuditLogRepository;
+// まとめて書き込む監査ログの一覧を受け取るために使う
+import java.util.List;
 // Spring に管理させるためのコンポーネント宣言
 import org.springframework.stereotype.Component;
 // トランザクションの伝播方法を指定する列挙
@@ -47,18 +49,30 @@ public class AuditLogWriter {
     }
 
     /**
-     * 監査ログ 1 行を新しいトランザクションで保存する。
+     * 監査ログをまとめて新しいトランザクションで保存する。
+     *
+     * <p><b>なぜ 1 行ずつではなく一括なのか</b>: 1 件ごとにトランザクションを開くと、
+     * 1 つの業務トランザクションで N 件の行を触ったときに N 回の開始・挿入・コミットが走る。
+     * さらに、この書き込みは業務トランザクションの後始末が終わる前に呼ばれるため、
+     * 業務側の DB 接続を掴んだまま<b>2 本目の接続</b>を借りることになる。接続プールの上限が
+     * 小さい環境では実効的な同時書き込み数が半減し、極端な設定では枯渇しうる。
+     * 1 トランザクション ＝ 1 回の書き込みにまとめて、借りる接続を 1 本・1 回で済ませる。
      *
      * <p>失敗（DB 断など）の握りつぶしはここでは行わない。呼び出し元
      * （{@link AuditRecorder}）が業務処理を止めないために例外を捕捉する。ここで捕捉すると
      * 「トランザクションはロールバックされたのに呼び出し元は成功と認識する」ねじれが起きる。
      *
-     * @param auditLog 保存する監査ログ（呼び出し元で組み立て済み）
+     * @param auditLogs 保存する監査ログの一覧（呼び出し元で組み立て済み。空なら何もしない）
      */
     // 新しいトランザクションを開始してこのメソッドを実行する
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void write(AuditLog auditLog) {
-        // 監査ログを 1 行保存する（追記のみ。更新・削除は行わない）
-        auditLogRepository.save(auditLog);
+    public void write(List<AuditLog> auditLogs) {
+        // 書くものが無ければトランザクションを開くだけ無駄なので何もしない
+        if (auditLogs.isEmpty()) {
+            // 何も保存せず戻る
+            return;
+        }
+        // 監査ログをまとめて保存する（追記のみ。更新・削除は行わない）
+        auditLogRepository.saveAll(auditLogs);
     }
 }

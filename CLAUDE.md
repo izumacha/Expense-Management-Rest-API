@@ -51,7 +51,7 @@ docker compose up --build        # PostgreSQL + アプリを一括起動（推�
 - `exception/` — `GlobalExceptionHandler` ＋カスタム例外（`NotFoundException` / `DuplicateException`）を HTTP ステータスへマップ。
 - `config/` — Spring Security 設定（`SecurityConfig`: JWT 認証必須化・CORS 許可オリジン制限・401/403 のエラー契約整形）、JWT の鍵構成（`JwtConfig`: HS256 共有シークレットの検証と JwtEncoder/JwtDecoder。シークレット未設定・32 バイト未満は起動失敗）、API ユーザー構成（`ApiUserConfig`: 環境変数由来の単一ユーザー + bcrypt 照合。未設定・平文ハッシュは起動失敗）、タイムゾーン固定（`TimeZoneConfig`）。
 - `security/` — IP ベースのレート制限フィルタ（`RateLimitFilter`）。
-- `validation/` — Bean Validation 制約（`MaxCodePoints`、コードポイント単位の文字数検証）とカテゴリ名の正規化ユーティリティ（`CategoryNameNormalizer`、前後空白除去 + Unicode NFC 正規化。制約自体ではなく DTO の正規コンストラクタから呼ばれる前処理）。
+- `validation/` — Bean Validation 制約（`MaxCodePoints`、コードポイント単位の文字数検証）と、DTO の正規コンストラクタから呼ばれるカテゴリ名の正規化ユーティリティ（`CategoryNameNormalizer`、前後空白除去 + Unicode NFC 正規化）、および外部由来の文字列を記録先へ書く前に無害化する共通ユーティリティ（`TextSanitizer`、制御文字の置換＋長さの打ち切り。ログ出力と監査ログの両方が使う）。
 - `web/` — 横断的関心事: エラー応答の共通整形（`ApiErrorWriter`）、ページング入力の無害化（`PageableSanitizer`）、リクエスト本文サイズ上限（`RequestBodySizeLimitFilter`）。
 - `audit/` — 監査ログ（誰が・いつ・どの行に・何をしたか）。`AuditAction`（操作種別）/ `AuditActorResolver`（操作主体の解決）/ `AuditRecorder`（記録の組み立てと書き込み時期の決定）/ `AuditLogWriter`（独立トランザクションでの書き込み）/ `EntityAuditListener`（JPA の永続化フック）。認証の成否は `service/AuthTokenService`（トークン発行の唯一の経路）が記録する。
 

@@ -17,6 +17,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 // 依存を注入するアノテーション
 import org.springframework.beans.factory.annotation.Autowired;
+// 後始末で対象を絞った DELETE を投げるための JDBC ヘルパー
+import org.springframework.jdbc.core.JdbcTemplate;
 // トランザクションの伝播方法を指定する列挙
 import org.springframework.transaction.annotation.Propagation;
 // テストのトランザクション制御に使うアノテーション
@@ -50,6 +52,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AuditLogPersistenceTest extends AbstractRepositoryTest {
 
+    /**
+     * このクラスが作るカテゴリ名に共通して付ける接頭辞。
+     *
+     * <p>後始末をこの接頭辞に一致する行だけに絞るために使う。テーブルを丸ごと消すと、
+     * 同じコンテナ DB を共有する他のテストクラスが将来コミットした値まで巻き添えにする。
+     */
+    private static final String TEST_CATEGORY_PREFIX = "監査テスト用";
+
     // 監査対象の操作に使うカテゴリリポジトリ
     @Autowired
     private CategoryRepository categoryRepository;
@@ -57,6 +67,10 @@ class AuditLogPersistenceTest extends AbstractRepositoryTest {
     // 記録された監査ログを読み出すリポジトリ
     @Autowired
     private AuditLogRepository auditLogRepository;
+
+    // 後始末で対象を絞った DELETE を投げるための JDBC ヘルパー
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     // 各テストが独立して行数を数えられるよう、開始前に対象テーブルを空にする
     @BeforeEach
@@ -79,14 +93,40 @@ class AuditLogPersistenceTest extends AbstractRepositoryTest {
         clearTables();
     }
 
-    // 監査ログとカテゴリを空にする共通処理（前処理と後処理で使う。§6 DRY）
+    /**
+     * このクラスが作った行だけを消す共通処理（前処理と後処理で使う。§6 DRY）。
+     *
+     * <p><b>なぜテーブルを丸ごと消さないのか</b>: このコンテナ DB は他のリポジトリテストと
+     * 共有している。今はどのクラスもトランザクションがロールバックされるので全消ししても
+     * 実害は出ないが、将来どこかがコミットする値を持った瞬間に、実行順序に依存して
+     * 消えたり消えなかったりする不安定なテストになる。また `expenses` から参照されている
+     * カテゴリが残っていると全消しは外部キー違反で落ちる。対象を接頭辞で絞れば、どちらも起きない。
+     *
+     * <p>監査ログは「削除できないこと」をリポジトリの型で保証しているため、後始末だけは
+     * JDBC で直接消す（本番経路では消せないままにしておくのが目的なので、抜け道を
+     * リポジトリ側に作らない）。
+     */
     private void clearTables() {
-        // 先に監査ログを空にする
-        auditLogRepository.deleteAll();
-        // カテゴリを全件削除する（この削除自体も監査ログを生む）
-        categoryRepository.deleteAll();
-        // 直前の削除が生んだ監査ログを消して、監査ログを 0 件に揃える
-        auditLogRepository.deleteAll();
+        // このクラスが作ったカテゴリに対する監査ログを消す。
+        // 対象行が消えた後では entity_id から辿れなくなるため、カテゴリより先に消す
+        jdbcTemplate.update(
+                // 対象のカテゴリ ID に紐づく監査ログだけを削除する
+                "DELETE FROM audit_logs WHERE entity_name = 'Category'"
+                        + " AND entity_id IN (SELECT CAST(id AS varchar) FROM categories WHERE name LIKE ?)",
+                // 接頭辞で始まる名前だけを対象にする
+                TEST_CATEGORY_PREFIX + "%");
+        // 対象行が既に消えている（削除を検証したテストの後）ぶんの監査ログも消す。
+        // 認証イベントはこのクラスでは作らないため、Category の記録だけが残りうる
+        jdbcTemplate.update(
+                // カテゴリ表に対応する行が無い Category の監査ログを削除する
+                "DELETE FROM audit_logs WHERE entity_name = 'Category'"
+                        + " AND entity_id NOT IN (SELECT CAST(id AS varchar) FROM categories)");
+        // このクラスが作ったカテゴリを消す
+        jdbcTemplate.update(
+                // 接頭辞で始まる名前のカテゴリだけを削除する
+                "DELETE FROM categories WHERE name LIKE ?",
+                // 接頭辞で始まる名前だけを対象にする
+                TEST_CATEGORY_PREFIX + "%");
     }
 
     // 作成が CREATE として記録されることを検証する（配線が生きている最小の証明）

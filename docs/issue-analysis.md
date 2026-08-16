@@ -270,7 +270,7 @@
 
 **記録漏れを機械的に防ぐ仕掛け**（人手の付け忘れが「静かに監査されないテーブル」を生むため）
 
-- `AuditedEntityCoverageTest` — `domain` 配下の全 `@Entity` を走査し、`AuditLog` 自身を除く
+- `AuditedEntityCoverageTest` — アプリのパッケージ配下の全 `@Entity`（抽象クラスを含む）を走査し、`AuditLog` 自身を除く
   すべてが `AuditedEntity` の実装と `@EntityListeners(EntityAuditListener.class)` を
   備えていることを検証する（新エンティティの付け忘れはビルドで落ちる）。
 - `AuthenticationAuditScopeTest` — 実物のフィルタチェーン上で認証記録の**過不足の両方**を固定する

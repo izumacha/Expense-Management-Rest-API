@@ -11,6 +11,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 // 引数の捕捉に使う ArgumentCaptor
 import org.mockito.ArgumentCaptor;
+// 捕捉した書き込み内容を扱う型
+import java.util.List;
 // トランザクション同期の登録・取り出しを行う静的ホルダ
 import org.springframework.transaction.support.TransactionSynchronization;
 // トランザクション同期の状態を制御する静的ホルダ
@@ -60,13 +62,37 @@ class AuditRecorderTest {
     // 検証対象
     private final AuditRecorder recorder = new AuditRecorder(writer, actorResolver);
 
-    // トランザクション同期を有効にしたテストの後始末（他テストへ状態を漏らさない）
+    /**
+     * トランザクション同期を有効にしたテストの後始末（他テストへ状態を漏らさない）。
+     *
+     * <p>単に同期を消すだけでは足りない。検証対象は「トランザクションへ結び付けた入れ物を
+     * {@code afterCompletion} で外す」実装なので、その呼び出しを模擬しないと入れ物が
+     * スレッドに残り、<b>次のテストが「既に予約済み」と誤認して書き込みを予約しなくなる</b>。
+     * 実際のトランザクションマネージャは成否に関わらず必ず afterCompletion を呼ぶため、
+     * ここでも同じ順序で呼んでから同期を消す。
+     */
     @AfterEach
     void clearSynchronization() {
-        // 同期が有効なままなら解除する
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            // スレッドローカルの同期状態を消す
-            TransactionSynchronizationManager.clearSynchronization();
+        // 同期が有効でなければ後始末は不要
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            // そのまま終える
+            return;
+        }
+        // 登録されたコールバックへ完了通知を送り、結び付けた入れ物を外させる
+        for (TransactionSynchronization synchronization : TransactionSynchronizationManager.getSynchronizations()) {
+            // 状態不明の完了として通知する（成否によらず後片付けが走ることの確認も兼ねる）
+            synchronization.afterCompletion(TransactionSynchronization.STATUS_UNKNOWN);
+        }
+        // スレッドローカルの同期状態を消す
+        TransactionSynchronizationManager.clearSynchronization();
+    }
+
+    // 登録されたコールバックへコミット完了を通知するヘルパー（複数テストで使うため共通化。§6 DRY）
+    private void simulateCommit() {
+        // 登録されたコールバックを順に呼んでコミット完了を模擬する
+        for (TransactionSynchronization synchronization : TransactionSynchronizationManager.getSynchronizations()) {
+            // コミット後の処理を呼ぶ
+            synchronization.afterCommit();
         }
     }
 
@@ -79,11 +105,8 @@ class AuditRecorderTest {
         recorder.recordEntityChange(new Category("食費"), AuditAction.CREATE);
         // まだコミットしていないので書き込みは起きていないことを検証する
         verify(writer, never()).write(any());
-        // 登録されたコールバックを取り出してコミット完了を模擬する
-        for (TransactionSynchronization synchronization : TransactionSynchronizationManager.getSynchronizations()) {
-            // コミット後の処理を呼ぶ
-            synchronization.afterCommit();
-        }
+        // コミット完了を模擬する
+        simulateCommit();
         // コミット後に 1 回だけ書き込まれたことを検証する
         verify(writer).write(any());
     }
@@ -108,11 +131,12 @@ class AuditRecorderTest {
         // 主キーはテストから直接は設定できないため null のまま（採番前）で記録する
         recorder.recordEntityChange(category, AuditAction.DELETE);
         // 書き込まれた監査ログを捕捉する
-        ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AuditLog>> captor = ArgumentCaptor.forClass(List.class);
         // 書き込みが 1 回行われたことを確認しつつ引数を取り出す
         verify(writer).write(captor.capture());
-        // 捕捉した監査ログを取り出す
-        AuditLog written = captor.getValue();
+        // 捕捉した監査ログ（1 件）を取り出す
+        AuditLog written = captor.getValue().get(0);
         // 対象の種類がエンティティの単純クラス名であることを検証する
         assertThat(written.getEntityName()).isEqualTo("Category");
         // 操作の種別が渡したとおりであることを検証する
@@ -129,11 +153,12 @@ class AuditRecorderTest {
         // ログイン成功を記録する
         recorder.recordAuthentication(AuditAction.LOGIN_SUCCESS, "api-user");
         // 書き込まれた監査ログを捕捉する
-        ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AuditLog>> captor = ArgumentCaptor.forClass(List.class);
         // 書き込みが 1 回行われたことを確認しつつ引数を取り出す
         verify(writer).write(captor.capture());
-        // 捕捉した監査ログを取り出す
-        AuditLog written = captor.getValue();
+        // 捕捉した監査ログ（1 件）を取り出す
+        AuditLog written = captor.getValue().get(0);
         // 認証イベントを表す固定値が対象の種類に入ることを検証する
         assertThat(written.getEntityName()).isEqualTo(AuditRecorder.AUTHENTICATION_ENTITY_NAME);
         // 認証は特定の行に対する操作ではないので主キーが無いことを検証する
@@ -151,6 +176,27 @@ class AuditRecorderTest {
         assertThatCode(() -> recorder.recordAuthentication(AuditAction.LOGIN_FAILURE, "attacker"))
                 // 例外が投げられないことを検証する
                 .doesNotThrowAnyException();
+    }
+
+    // 同一トランザクション内の複数の変更が 1 回の書き込みにまとめられることを検証する
+    @Test
+    void 同一トランザクションの複数変更は1回にまとめて書かれる() {
+        // トランザクション同期が有効な状態（＝トランザクションの中）を作る
+        TransactionSynchronizationManager.initSynchronization();
+        // 3 件の変更を記録する（1 つの業務トランザクションで複数行を触った状況）
+        recorder.recordEntityChange(new Category("食費"), AuditAction.CREATE);
+        recorder.recordEntityChange(new Category("交通費"), AuditAction.CREATE);
+        recorder.recordEntityChange(new Category("娯楽費"), AuditAction.DELETE);
+        // コミット完了を模擬する
+        simulateCommit();
+        // 書き込まれた監査ログを捕捉する
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AuditLog>> captor = ArgumentCaptor.forClass(List.class);
+        // 書き込みが「1 回だけ」行われたことを確認しつつ引数を取り出す
+        // （1 件ずつ書くと独立トランザクションが 3 回走り、そのぶん DB 接続の借用も増える）
+        verify(writer).write(captor.capture());
+        // 3 件がまとめて渡されたことを検証する
+        assertThat(captor.getValue()).hasSize(3);
     }
 
     // 空のユーザー名は「特定不能」を表す固定値になることを検証する（境界値）
