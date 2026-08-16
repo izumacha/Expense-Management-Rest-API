@@ -198,8 +198,10 @@ class AuditLogReadmeDdlTest {
         StandardServiceRegistry registry = new StandardServiceRegistryBuilder()
                 // 本番と同じ PostgreSQL の方言を使う（型名はここで決まる）
                 .applySetting(AvailableSettings.DIALECT, PostgreSQLDialect.class.getName())
-                // DB へ接続してメタデータを取りに行かせない（接続不要でマッピングだけ組み立てる）
-                .applySetting("hibernate.boot.allow_jdbc_metadata_access", "false")
+                // DB へ接続してメタデータを取りに行かせない（接続不要でマッピングだけ組み立てる）。
+                // キーは文字列で書かず定数を使う。Hibernate は知らない設定キーを黙って無視するため、
+                // 綴り違いや将来の改名が「気付かないまま JDBC 接続を試みる」状態に戻してしまう
+                .applySetting(AvailableSettings.ALLOW_METADATA_ON_BOOT, "false")
                 // Spring Boot 3 の既定と同じ物理命名規則（キャメルケース→スネークケース）を使う
                 .applySetting(AvailableSettings.PHYSICAL_NAMING_STRATEGY,
                         "org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy")
@@ -224,18 +226,24 @@ class AuditLogReadmeDdlTest {
         }
     }
 
-    /** 組み立てたマッピング情報から、監査ログのテーブルを 1 つ取り出す。 */
+    /**
+     * 組み立てたマッピング情報から、監査ログのエンティティが束ねられているテーブルを取り出す。
+     *
+     * <p>名前空間の先頭のテーブルを取るのではなく<b>エンティティから辿る</b>。1 エンティティが
+     * 複数のテーブルを生む場合（{@code @ElementCollection} / {@code @SecondaryTable} など）に
+     * 先頭を取ると、どのテーブルが返るかが走査順まかせになり、副テーブルを掴んだ時点で
+     * 「README にそのテーブルが無い」という<b>実際には正しい DDL を否定する</b>失敗になる。
+     */
     private static Table findTable(Metadata metadata) {
-        // 名前空間ごとにテーブルを探す
-        for (var namespace : metadata.getDatabase().getNamespaces()) {
-            // 名前空間に含まれるテーブルを 1 つずつ確認する
-            for (Table table : namespace.getTables()) {
-                // 監査ログのエンティティしか登録していないので、最初に見つかったものが目的のテーブル
-                return table;
-            }
+        // エンティティ名からマッピングを引く
+        var binding = metadata.getEntityBinding(AuditLog.class.getName());
+        // 引けないのはマッピングの組み立てに失敗しているので握り潰さず失敗させる（§6）
+        if (binding == null) {
+            // 何が取れなかったかを添えて停止する
+            throw new IllegalStateException("AuditLog のマッピングを取り出せませんでした");
         }
-        // 1 つも見つからないのはマッピングの組み立てに失敗しているので握り潰さず失敗させる（§6）
-        throw new IllegalStateException("AuditLog のマッピングからテーブルを取り出せませんでした");
+        // エンティティが束ねられている主テーブルを返す
+        return binding.getTable();
     }
 
     /** Hibernate のテーブル情報を、README 側と突き合わせられる形へ変換する。 */
@@ -299,26 +307,36 @@ class AuditLogReadmeDdlTest {
      * <p>採番方式はマッピング情報の列からは読み取れないため、ここだけは注釈を直接見る。
      * 対象は {@code @Id} かつ {@code @GeneratedValue(strategy = IDENTITY)} の列で、列名は
      * 自前で組み立てず Hibernate が決めた主キーの列名をそのまま使う（命名規則を写さないため）。
+     *
+     * <p><b>親クラスまで遡って探す</b>のは、主キーを {@code @MappedSuperclass} の共通基底へ
+     * 切り出す（監査対象が増えたときにありがちな整理）と、宣言フィールドだけでは {@code @Id} が
+     * 見えなくなるため。見えないと期待値が空になり、README 側の識別列指定が「余分」に見える。
+     * 赤くなったテストを通す自然な手当ては README から識別列の指定を消すことだが、そうすると
+     * 本番の主キーに既定値が無くなり、監査ログの挿入だけが常に失敗する——しかも書き込みは
+     * fail-open なので API は正常に見える。まさにこの検証が防ぐはずの壊れ方を招く。
      */
     private static Set<String> identityColumnsFromAnnotations(List<String> primaryKeyColumns) {
         // 識別列の名前を集める入れ物
         Set<String> identityColumns = new LinkedHashSet<>();
-        // エンティティのフィールドを 1 つずつ確認する
-        for (Field field : AuditLog.class.getDeclaredFields()) {
-            // 主キーでなければ対象外
-            if (!field.isAnnotationPresent(Id.class)) {
-                // 次のフィールドへ進む
-                continue;
+        // エンティティ本体から親クラスへ順に遡って確認する
+        for (Class<?> type = AuditLog.class; type != null && type != Object.class; type = type.getSuperclass()) {
+            // そのクラスが宣言しているフィールドを 1 つずつ確認する
+            for (Field field : type.getDeclaredFields()) {
+                // 主キーでなければ対象外
+                if (!field.isAnnotationPresent(Id.class)) {
+                    // 次のフィールドへ進む
+                    continue;
+                }
+                // 採番方式の指定を取り出す
+                GeneratedValue generatedValue = field.getAnnotation(GeneratedValue.class);
+                // DB 側の自動採番（IDENTITY）でなければ識別列にはならない
+                if (generatedValue == null || generatedValue.strategy() != GenerationType.IDENTITY) {
+                    // 次のフィールドへ進む
+                    continue;
+                }
+                // 単一列の主キーであることを前提に、Hibernate が決めた主キーの列名を識別列とする
+                identityColumns.addAll(primaryKeyColumns);
             }
-            // 採番方式の指定を取り出す
-            GeneratedValue generatedValue = field.getAnnotation(GeneratedValue.class);
-            // DB 側の自動採番（IDENTITY）でなければ識別列にはならない
-            if (generatedValue == null || generatedValue.strategy() != GenerationType.IDENTITY) {
-                // 次のフィールドへ進む
-                continue;
-            }
-            // 単一列の主キーであることを前提に、Hibernate が決めた主キーの列名を識別列とする
-            identityColumns.addAll(primaryKeyColumns);
         }
         // 集めた識別列を返す
         return identityColumns;
@@ -355,13 +373,24 @@ class AuditLogReadmeDdlTest {
             String[] tokens = item.split("\\s+");
             // 先頭の語が制約の語なら、これは列ではなく表制約（PRIMARY KEY (id) など）
             if (CONSTRAINT_KEYWORDS.contains(tokens[0])) {
-                // 表制約のうち主キーだけは対象列を拾う（他の制約は現状この DDL に現れない）
+                // 主キーは対象列を拾って比較に使う
                 if (item.startsWith(PRIMARY_KEY_KEYWORD)) {
                     // 制約が囲む列名を主キーとして加える
                     primaryKeyColumns.addAll(parseColumnList(item));
+                    // 次の項目へ進む
+                    continue;
                 }
-                // 列ではないので次の項目へ進む
-                continue;
+                // 主キー以外の表制約は、この検証が正本側と突き合わせる術を持たない。
+                // 【なぜ黙って読み飛ばさないか】読み飛ばすと、エンティティに無い制約を README に
+                // 書いても素通りする。たとえば UNIQUE (entity_name, entity_id) を足すと、
+                // 同じ行への 2 度目の記録（CREATE のあとの UPDATE）が一意制約に弾かれ、
+                // 監査ログの書き込みは fail-open なので WARN だけ出して記録が落ちる。
+                // validate も制約は見ないため、どこにも合図が出ないまま監査証跡が欠ける。
+                // 扱えないものは素通りさせず、検証を広げるよう促して止める
+                throw new IllegalStateException(
+                        // 何が扱えなくて、どうすればよいかを示す
+                        "README の DDL に、この検証が扱えない表制約が含まれています: " + item
+                                + "（正本側と突き合わせる方法を AuditLogReadmeDdlTest に追加してください）");
             }
             // 列名と型の 2 語は最低限必要なので、足りなければ解析できていない
             assertThat(tokens.length)
@@ -371,8 +400,11 @@ class AuditLogReadmeDdlTest {
                     .isGreaterThanOrEqualTo(2);
             // 1 語目が列名
             String name = tokens[0];
-            // 3 語目以降が修飾子（NOT NULL / PRIMARY KEY / 識別列の指定）
-            String modifiers = item.substring(name.length() + tokens[1].length() + 1).trim();
+            // 3 語目以降が修飾子（NOT NULL / PRIMARY KEY / 識別列の指定）。
+            // 文字数で切り出すと列名と型の間の空白が 1 文字だと仮定することになり、README のように
+            // 桁をそろえた DDL では型まで巻き込んで読んでしまう（型の中に修飾子と同じ語が
+            // 現れると誤検出になる）。分割済みの語からつなぎ直して仮定を持たない
+            String modifiers = String.join(" ", java.util.Arrays.copyOfRange(tokens, 2, tokens.length));
             // 列に直接書かれた主キー指定は、表制約と同じく主キーの構成列になる
             if (modifiers.contains(PRIMARY_KEY_KEYWORD)) {
                 // 主キーの列として加える
@@ -467,8 +499,8 @@ class AuditLogReadmeDdlTest {
                         .as("README の DDL ブロックを閉じるコードフェンス（%s）が見つかりません", CODE_FENCE)
                         // 見つかった位置は 0 以上になる
                         .isNotNegative();
-                // 開始位置から閉じフェンスの手前までを DDL 本体として返す
-                return readme.substring(cursor, end);
+                // 開始位置から閉じフェンスの手前までを DDL 本体とし、コメントを落として返す
+                return removeLineComments(readme.substring(cursor, end));
             }
             // 一致しなければ次のテーブル定義を探す
             cursor = readme.indexOf(CREATE_TABLE_KEYWORD, cursor + CREATE_TABLE_KEYWORD.length());
@@ -478,6 +510,30 @@ class AuditLogReadmeDdlTest {
                 // 何が無くて、どう直せばよいかを示す
                 "README に「" + CREATE_TABLE_KEYWORD + " " + expectedTableName + "」が見つかりません"
                         + "（本番へ手動適用する DDL が失われていないか、テーブル名が @Table とずれていないか確認してください）");
+    }
+
+    /**
+     * SQL の行コメント（{@code --} から行末まで）を取り除く。
+     *
+     * <p>README は本番へ適用する手順書なので、列や索引の意図をコメントで補うのは自然な編集。
+     * 落とさずに解析すると、コメント付きの<b>正しい</b> DDL が「列がずれている」「索引が足りない」
+     * として落ち、書いた人は存在しないずれを直そうとすることになる。この検出網が防ぐはずの
+     * 「誤った指示」を自ら出さないために、解析の前に取り除く。
+     */
+    private static String removeLineComments(String ddl) {
+        // 組み立て先のバッファ
+        StringBuilder stripped = new StringBuilder(ddl.length());
+        // 行ごとに処理する（コメントは行末までなので行単位で足りる）
+        for (String line : ddl.split("\n", -1)) {
+            // コメントの開始位置を探す
+            int comment = line.indexOf("--");
+            // コメントがあればその手前まで、無ければ行全体を残す
+            stripped.append(comment >= 0 ? line.substring(0, comment) : line)
+                    // 行の区切りを戻す
+                    .append('\n');
+        }
+        // コメントを落とした DDL を返す
+        return stripped.toString();
     }
 
     /**
@@ -707,28 +763,15 @@ class AuditLogReadmeDdlTest {
     @Test
     void READMEのDDLの列が正本と一致する() {
         // 【なぜ過不足の両方を見るか】足りない列は validate で起動失敗になり、余分な列は
-        // validate を素通りして使われない列が本番だけに残り続ける
+        // validate を素通りして使われない列が本番だけに残り続ける。
+        // なお containsExactlyInAnyOrder は個数まで見る比較なので、同じ列を 2 度書いた
+        // README（PostgreSQL が適用時に拒否する）もここで落ちる
         assertThat(readmeSchema.columns())
                 // 失敗時に何が起きているかと直し方を示す
                 .as("README の DDL の列が AuditLog のマッピングと一致しません"
                         + "（列を変えたら README「監査ログの確認」の DDL も同じ PR で直してください）")
                 // 順序を問わず過不足なく一致することを検証する
                 .containsExactlyInAnyOrderElementsOf(entitySchema.columns());
-    }
-
-    // README の DDL に同じ列が二重に書かれていないことを検証する
-    @Test
-    void READMEのDDLに重複した列が無い() {
-        // 読み取った列名を取り出す
-        List<String> names = readmeSchema.columns().stream().map(ColumnDefinition::name).toList();
-        // 【なぜ確かめるか】同じ列を 2 度書いても、名前で引く比較では 1 つに畳まれて気付けない。
-        // PostgreSQL は適用時に「column ... specified more than once」で拒否するため、
-        // 検出網が通したのに本番で適用できない DDL になる
-        assertThat(names)
-                // 失敗時に何が起きているかを示す
-                .as("README の DDL に同じ列が複数回定義されています")
-                // 重複が無いことを検証する
-                .doesNotHaveDuplicates();
     }
 
     // 主キーが一致し、自動採番の識別列として定義されていることを検証する
