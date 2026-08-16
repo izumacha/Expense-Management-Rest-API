@@ -133,6 +133,26 @@ class AuditLogReadmeDdlTest {
             Set.of("primary", "foreign", "unique", "check", "constraint", "exclude");
 
     /**
+     * 列に直接書ける修飾子のうち、この検証が意味を理解できる語。
+     *
+     * <p>ここに無い語（{@code unique} / {@code check} / {@code references} など）が列に付いていたら、
+     * 正本と突き合わせる術が無いということなので<b>黙って無視せず止める</b>。詳しい理由は
+     * {@link #rejectUnsupported(String, String)} を参照。
+     */
+    private static final Set<String> SUPPORTED_COLUMN_MODIFIERS =
+            Set.of("not", "null", "primary", "key", "generated", "by", "default", "as", "identity");
+
+    /**
+     * 列に直接書かれた制約を示す語（主キーを除く）。
+     *
+     * <p>型の名前が複数語になること（{@code timestamp(6) with time zone} など）があるため、
+     * 知らない語をすべて拒否すると正しい型まで弾いてしまう。一方でこれらの語は型名には現れないので、
+     * 列名より後ろのどこに現れても「この検証が扱えない制約」と判断してよい。
+     */
+    private static final Set<String> COLUMN_LEVEL_CONSTRAINT_KEYWORDS =
+            Set.of("unique", "check", "references", "constraint", "foreign", "exclude");
+
+    /**
      * テーブル 1 つ分のスキーマ（正本側と README 側を同じ形にそろえて突き合わせる）。
      *
      * @param tableName          テーブル名
@@ -400,11 +420,25 @@ class AuditLogReadmeDdlTest {
                     .isGreaterThanOrEqualTo(2);
             // 1 語目が列名
             String name = tokens[0];
-            // 3 語目以降が修飾子（NOT NULL / PRIMARY KEY / 識別列の指定）。
-            // 文字数で切り出すと列名と型の間の空白が 1 文字だと仮定することになり、README のように
-            // 桁をそろえた DDL では型まで巻き込んで読んでしまう（型の中に修飾子と同じ語が
-            // 現れると誤検出になる）。分割済みの語からつなぎ直して仮定を持たない
-            String modifiers = String.join(" ", java.util.Arrays.copyOfRange(tokens, 2, tokens.length));
+            // 2 語目以降のうち、修飾子が始まる手前までが型。
+            // 【なぜ 1 語と決め打たないか】`timestamp(6) with time zone` や `double precision` の
+            // ように型が複数語になることがある。1 語目だけを型とすると、残りが修飾子に混ざって
+            // <b>どう書いても一致しない</b>状態になり、通す唯一の方法が「README から型の一部を
+            // 削る」＝本番の validate を落とす修正になってしまう
+            int modifierStart = indexOfFirstModifier(tokens);
+            // 型の語をつないで 1 つの型名にする（Hibernate 側も空白区切りで返す）
+            String sqlType = String.join(" ", java.util.Arrays.copyOfRange(tokens, 1, modifierStart));
+            // 修飾子の語をつなぐ
+            String modifiers = String.join(" ", java.util.Arrays.copyOfRange(tokens, modifierStart, tokens.length));
+            // 列に直接書かれた制約（UNIQUE / CHECK / REFERENCES など）が無いか、列名より後ろを全部見る。
+            // 型に吸収されて「型が違う」という分かりにくい失敗になるのを防ぎ、原因を名指しする
+            for (int i = 1; i < tokens.length; i++) {
+                // 制約の語であれば、正本と突き合わせられないので止める
+                if (COLUMN_LEVEL_CONSTRAINT_KEYWORDS.contains(tokens[i])) {
+                    // 何が扱えないかを示して停止する
+                    rejectUnsupported("列 " + name + " に直接書かれた制約「" + tokens[i] + "」", item);
+                }
+            }
             // 列に直接書かれた主キー指定は、表制約と同じく主キーの構成列になる
             if (modifiers.contains(PRIMARY_KEY_KEYWORD)) {
                 // 主キーの列として加える
@@ -415,10 +449,10 @@ class AuditLogReadmeDdlTest {
                 // 識別列として加える
                 identityColumns.add(name);
             }
-            // 解析した 1 列分を加える（2 語目が型）。
+            // 解析した 1 列分を加える。
             // NULL 可否はここでは「NOT NULL と書かれているか」だけを持たせ、主キーによる
             // 非 NULL は下の 2 周目で反映する
-            columns.add(new ColumnDefinition(name, tokens[1], modifiers.contains(NOT_NULL_KEYWORD)));
+            columns.add(new ColumnDefinition(name, sqlType, modifiers.contains(NOT_NULL_KEYWORD)));
         }
         // インデックス定義を解析する
         List<IndexDefinition> indexes = parseIndexes(ddl.substring(close), expectedTableName);
@@ -491,6 +525,17 @@ class AuditLogReadmeDdlTest {
             }
             // 正本と完全に一致したらこの文が目的の DDL
             if (tableName.equals(expectedTableName)) {
+                // 同じテーブルの DDL が他にも書かれていないことを確かめる。
+                // 【なぜ確かめるか】README は日英 2 言語なので、英語側にも同じ DDL が写される
+                // ことがありうる。最初に見つけた 1 つだけを見ていると、2 つ目の写しは
+                // 誰にも検証されないまま古くなり、英語だけを読む運用者に古い DDL を渡す
+                assertThat(readme.indexOf(CREATE_TABLE_KEYWORD, cursor + CREATE_TABLE_KEYWORD.length()))
+                        // 失敗時に何が起きているかと直し方を示す
+                        .as("README に %s の DDL が複数あります"
+                                + "（写しが増えると検証されない方が古くなります。1 箇所にまとめてください）",
+                                expectedTableName)
+                        // 2 つ目のテーブル定義が無いことを検証する
+                        .isNegative();
                 // DDL ブロックの終わり（次のコードフェンス）を探す
                 int end = readme.indexOf(CODE_FENCE, cursor);
                 // 閉じフェンスが無ければ Markdown が壊れているので失敗させる
@@ -550,10 +595,21 @@ class AuditLogReadmeDdlTest {
         for (String rawStatement : ddl.split(";")) {
             // 前後の空白を落とす
             String statement = rawStatement.trim();
-            // インデックス定義でない断片（閉じ括弧だけの行など）は読み飛ばす
-            if (!statement.startsWith(CREATE_KEYWORD)) {
+            // CREATE TABLE の閉じ括弧だけが残った断片は文ではないので読み飛ばす
+            if (statement.equals(")")) {
                 // 次の文へ進む
                 continue;
+            }
+            // 空行だけの断片も読み飛ばす
+            if (statement.isEmpty()) {
+                // 次の文へ進む
+                continue;
+            }
+            // インデックス定義以外の文（ALTER TABLE ... ADD CONSTRAINT / DROP など）は
+            // 正本と突き合わせる術が無い。読み飛ばすと制約の追加が素通りするので止める
+            if (!statement.startsWith(CREATE_KEYWORD)) {
+                // 何が扱えないかを示して停止する
+                rejectUnsupported("インデックス定義以外の文", statement);
             }
             // 対象列を囲む丸括弧の開き位置を探す
             int open = statement.indexOf('(');
@@ -597,11 +653,58 @@ class AuditLogReadmeDdlTest {
                     .as("インデックス %s が別のテーブルに向いています: %s", tokens[2 + offset], statement)
                     // 対象テーブル名が一致することを検証する
                     .isEqualTo(expectedTableName);
+            // 対象列を読み取る
+            List<String> indexColumns = parseColumnList(statement);
+            // 並び順の指定（DESC / ASC）や演算子クラスが付いていないか確かめる。
+            // 正本側は列名しか持たないため、付いたまま比較すると「同じ索引」と誤って通してしまう
+            for (String indexColumn : indexColumns) {
+                // 列名に空白が残っていれば、それは列名以外の指定が付いているということ
+                if (indexColumn.contains(" ")) {
+                    // 何が扱えないかを示して停止する
+                    rejectUnsupported("索引の列に付いた指定「" + indexColumn + "」", statement);
+                }
+            }
             // 解析した 1 つ分を加える
-            indexes.add(new IndexDefinition(tokens[2 + offset], parseColumnList(statement), unique));
+            indexes.add(new IndexDefinition(tokens[2 + offset], indexColumns, unique));
         }
         // 解析結果を返す
         return indexes;
+    }
+
+    /**
+     * 列定義の語の並びから、型が終わって修飾子が始まる位置を返す。
+     *
+     * <p>型が何語になるかは方言しだいなので「型を数える」のではなく「修飾子の始まりを探す」。
+     * 知っている修飾子の語が現れた最初の位置までが型で、見つからなければ全部が型。
+     */
+    private static int indexOfFirstModifier(String[] tokens) {
+        // 列名（0 番目）と型の 1 語目（1 番目）は必ず型側なので 2 番目から探す
+        for (int i = 2; i < tokens.length; i++) {
+            // 知っている修飾子の語が現れたら、そこが修飾子の始まり
+            if (SUPPORTED_COLUMN_MODIFIERS.contains(tokens[i])) {
+                // その位置を返す
+                return i;
+            }
+        }
+        // 修飾子が見つからなければ、末尾までが型
+        return tokens.length;
+    }
+
+    /**
+     * この検証が意味を理解できない DDL に出会ったときに、黙って見逃さず止める。
+     *
+     * <p><b>なぜ読み飛ばさないか</b>: 読み飛ばすと、正本に無いものを README に書いても素通りする。
+     * たとえばエンティティに無い一意制約（表制約でも列に直接書く形でも）を足すと、同じ行への
+     * 2 度目の記録（{@code CREATE} のあとの {@code UPDATE}）が制約に弾かれる。監査ログの書き込みは
+     * fail-open なので WARN だけ出して記録が落ち、{@code validate} も制約は見ないため、
+     * <b>どこにも合図が出ないまま監査証跡が欠ける</b>。この検出網が防ぐはずの壊れ方そのものなので、
+     * 扱えないものは通さず、検証を広げるよう促して止める。
+     */
+    private static void rejectUnsupported(String what, String statement) {
+        // 何が扱えなくて、どうすればよいかを示して停止する
+        throw new IllegalStateException(
+                "README の DDL に、この検証が扱えない記述が含まれています（" + what + "）: " + statement.trim()
+                        + "（正本側と突き合わせる方法を AuditLogReadmeDdlTest に追加してください）");
     }
 
     /** 丸括弧に囲まれた列名の並び（{@code (a, b)}）を取り出して返す。 */
