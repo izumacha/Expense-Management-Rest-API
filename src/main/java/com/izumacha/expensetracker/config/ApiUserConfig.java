@@ -3,16 +3,12 @@ package com.izumacha.expensetracker.config;
 
 // プロパティ値を注入するアノテーション
 import org.springframework.beans.factory.annotation.Value;
-// アプリ内へイベントを発行するインターフェース（@EventListener が受け取る先）
-import org.springframework.context.ApplicationEventPublisher;
 // Bean を宣言するアノテーション
 import org.springframework.context.annotation.Bean;
 // このクラス自体を Spring に設定クラスとして登録するアノテーション
 import org.springframework.context.annotation.Configuration;
 // ユーザー名とパスワードを照合する認証マネージャのインターフェース
 import org.springframework.security.authentication.AuthenticationManager;
-// 認証の成功・失敗を Spring のイベントとして発行する標準実装
-import org.springframework.security.authentication.DefaultAuthenticationEventPublisher;
 // UserDetailsService と PasswordEncoder を組み合わせる標準の認証プロバイダ
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 // 複数の認証プロバイダを束ねる AuthenticationManager の標準実装
@@ -127,9 +123,8 @@ public class ApiUserConfig {
     /**
      * トークン発行時にユーザー名とパスワードを照合する認証マネージャを登録する。
      *
-     * @param userDetailsService      ユーザー名からユーザー情報を引くストア
-     * @param passwordEncoder         bcrypt のパスワード照合エンコーダ
-     * @param applicationEventPublisher 認証の成否をアプリ内イベントとして流す発行器
+     * @param userDetailsService ユーザー名からユーザー情報を引くストア
+     * @param passwordEncoder    bcrypt のパスワード照合エンコーダ
      * @return DaoAuthenticationProvider を束ねた AuthenticationManager
      */
     // このメソッドが返す AuthenticationManager を Spring の Bean として登録する
@@ -138,29 +133,15 @@ public class ApiUserConfig {
             // 上で登録したユーザーストア（Spring が注入する）
             UserDetailsService userDetailsService,
             // 上で登録した bcrypt エンコーダ（Spring が注入する）
-            PasswordEncoder passwordEncoder,
-            // アプリ内イベントの発行器（Spring が注入する）
-            ApplicationEventPublisher applicationEventPublisher) {
+            PasswordEncoder passwordEncoder) {
         // ユーザーストアとエンコーダを組み合わせる標準の認証プロバイダを生成する
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
         // ユーザー名の解決先としてユーザーストアを設定する
         provider.setUserDetailsService(userDetailsService);
         // パスワード照合に bcrypt エンコーダを設定する
         provider.setPasswordEncoder(passwordEncoder);
-        // プロバイダを 1 つ束ねた認証マネージャを生成する（ユーザー不在も既定で「資格情報不正」に丸められ、
+        // プロバイダを 1 つ束ねた認証マネージャを返す（ユーザー不在も既定で「資格情報不正」に丸められ、
         // ユーザー名の存在有無が応答から推測できない＝ユーザー列挙攻撃を防ぐ。§9）
-        ProviderManager providerManager = new ProviderManager(provider);
-        // 認証の成功・失敗をアプリ内イベントとして流すよう発行器を設定する。
-        // 【なぜ必要か】ProviderManager の既定の発行器は何も発行しない実装のため、これを設定しないと
-        // audit.AuthenticationAuditListener が静かに何も記録しなくなる（＝監査ログに認証イベントが
-        // 一切残らない状態が、テストを書かない限り気づかれずに成立してしまう）。
-        // 【なぜ自前で生成するか】Bean として注入すると、Spring Boot の自動設定が
-        // AuthenticationEventPublisher を提供するかどうかという外部条件に監査の成立が依存する。
-        // ここで明示的に生成すれば、依存するのは常に存在する ApplicationEventPublisher だけになる
-        providerManager.setAuthenticationEventPublisher(
-                // 標準実装（例外の種類に応じた失敗イベントへの振り分けを持つ）を使う。§9 認証まわりを自前実装しない
-                new DefaultAuthenticationEventPublisher(applicationEventPublisher));
-        // 発行器を設定済みの認証マネージャを返す
-        return providerManager;
+        return new ProviderManager(provider);
     }
 }

@@ -39,7 +39,8 @@ public final class TextSanitizer {
      * 制御文字を {@code '_'} に置き換え、{@code maxLength} 文字で打ち切った文字列を返す。
      *
      * @param value     無害化したい外部由来の文字列（{@code null} 可）
-     * @param maxLength 出力の最大文字数（0 以上。超過分は捨てる）
+     * @param maxLength 出力の最大文字数（0 以上。超過分は捨てる）。サロゲートペアを割らないよう、
+     *                  実際の出力はこれより 1 文字短くなることがある
      * @return 無害化済みの文字列。{@code value} が {@code null} なら文字列 {@code "null"}
      *         （呼び出し元で NPE にしないための防御。呼び出し元が別の既定値を使いたい場合は
      *         呼び出す前に自分で分岐する）
@@ -57,6 +58,17 @@ public final class TextSanitizer {
         }
         // 出力する長さを上限で打ち切る（超過分は記録しない）
         int length = Math.min(value.length(), maxLength);
+        // 打ち切り位置がサロゲートペア（絵文字など、2 つの char で 1 文字を表す並び）の
+        // 途中に落ちた場合は、その手前まで下げる。
+        // 【なぜ必要か】ペアを割ると単独サロゲートという「正しい UTF-8 に変換できない値」が残る。
+        // これを DB へ書こうとすると保存が失敗しうるため、攻撃者が上限ちょうどにペアが跨がる
+        // ユーザー名を送るだけで<b>自分のログイン失敗記録だけを落とせる</b>（＝総当たりの
+        // 検知・立証という監査ログの目的が破られる）。1 文字分短くなる副作用より、
+        // 記録が必ず残ることを優先する。
+        if (length > 0 && length < value.length() && Character.isHighSurrogate(value.charAt(length - 1))) {
+            // 割れたペアの先頭を含めないよう 1 つ手前で切る
+            length--;
+        }
         // 無害化後の文字を組み立てるバッファを、確定した長さで用意する
         StringBuilder sanitized = new StringBuilder(length);
         // 打ち切り後の範囲を 1 文字ずつ走査する

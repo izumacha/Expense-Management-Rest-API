@@ -57,7 +57,7 @@
 | 2.4 | `amount` の上限検証がない | **解消済み** | `CreateExpenseRequest` に `@Digits(integer = 17, fraction = 2)` を追加 |
 | 2.5 | `@PastOrPresent` の TZ 依存 | **解消済み** | `config/TimeZoneConfig.java` が `@PostConstruct` で JVM 既定タイムゾーンを起動時に `Asia/Tokyo` へ固定し、`@PastOrPresent`（`Clock.systemDefaultZone()` 依存）がコンテナの実行環境 TZ に左右されないようにした。`TimeZoneConfigTest` で回帰テスト済み |
 | 2.6 | カテゴリ更新・削除 API 不在 | **解消済み** | `CategoryController` に `PUT /api/categories/{id}`・`DELETE /api/categories/{id}` を追加（使用中カテゴリの削除は `CategoryInUseException` で 409） |
-| A.1 | 専用の監査ログがない（2026-08-12 追加所見） | **解消済み** | `domain/AuditLog.java`（`audit_logs` テーブル）と `audit/` パッケージを追加。データ変更は JPA の永続化フック（`EntityAuditListener` + `@EntityListeners`）で、認証イベントは Spring Security のイベント購読（`AuthenticationAuditListener`）で記録する。書き込みはコミット後・fail-open。記録漏れは `AuditedEntityCoverageTest`（全 `@Entity` の走査）、配線の断線は `AuditLogPersistenceTest`・`AuthenticationEventPublishingTest` が検出する。残る限界は下記「追加所見」に追記 |
+| A.1 | 専用の監査ログがない（2026-08-12 追加所見） | **解消済み** | `domain/AuditLog.java`（`audit_logs` テーブル）と `audit/` パッケージを追加。データ変更は JPA の永続化フック（`EntityAuditListener` + `@EntityListeners`）で、認証イベントは `AuthTokenService`（トークン発行の唯一の経路）で記録する。書き込みはコミット後・fail-open。記録漏れは `AuditedEntityCoverageTest`（全 `@Entity` の走査）、実行時配線の断線は `AuditLogPersistenceTest`、認証記録の過不足は `AuthenticationAuditScopeTest` が検出する。残る限界は下記「追加所見」に追記 |
 
 **再評価後の重大度サマリ**: 当初の 14 件（「重大 3 件」「高 4 件」「中 4 件」「低 3 件」）は
 **すべて解消済み**。当初分析より後に追加した所見（A.1 専用の監査ログがない）も解消済みである
@@ -224,17 +224,29 @@
 
 **実装**: `domain/AuditLog.java`（`audit_logs` テーブル）＋ `audit/` パッケージ
 （`AuditAction` / `AuditActorResolver` / `AuditRecorder` / `AuditLogWriter` /
-`EntityAuditListener` / `AuthenticationAuditListener`）。記録するのは 2 種類。
+`EntityAuditListener`）と、認証の成否を記録する `service/AuthTokenService`。記録するのは 2 種類。
 
 | 種類 | 記録経路 | `entity_name` | `action` |
 |---|---|---|---|
 | データ変更 | JPA の永続化フック（`@EntityListeners(EntityAuditListener.class)`） | `Expense` / `Category` | `CREATE` / `UPDATE` / `DELETE` |
-| 認証 | Spring Security の認証イベント購読 | `Authentication` | `LOGIN_SUCCESS` / `LOGIN_FAILURE` |
+| 認証 | `AuthTokenService`（トークン発行の唯一の経路） | `Authentication` | `LOGIN_SUCCESS` / `LOGIN_FAILURE` |
 
-対応案どおり、記録はサービス層ではなく永続化フックに寄せた（新しい保存経路を足しても記録の
-書き忘れが起きない）。認証イベントは `AuthenticationSuccessEvent` /
-`AbstractAuthenticationFailureEvent` を購読する。`ProviderManager` の既定の発行器は何も
-発行しないため、`config/ApiUserConfig` で `DefaultAuthenticationEventPublisher` を明示設定した。
+**データ変更**は対応案どおり、サービス層ではなく永続化フックに寄せた（新しい保存経路を足しても
+記録の書き忘れが起きない）。
+
+**認証イベント**は対応案が挙げていた「Spring Security のイベント購読」を<b>採らなかった</b>。
+実装して検証したところ、Bearer トークンを検証するリソースサーバの認証も同じイベントに乗るため、
+次の 2 つが起きることが分かったためである（`AuthenticationAuditScopeTest` で実証）。
+
+1. **通常の API 呼び出し 1 回ごとに「ログイン成功」が記録される。** 保存期間を持たない監査テーブルが
+   リクエスト数に比例して膨れ、ログイン成功の記録が「トークンが発行された証拠」として使えなくなる
+   （総当たりの立証という A.1 の目的が果たせない）。リクエストごとに監査書き込みのトランザクションも増える。
+2. **トークン検証の失敗では認証の主体名が Bearer トークン文字列そのものになる。** それを actor として
+   保存すると、資格情報を追記専用テーブルへ書き込むことになる（§9）。
+
+そこで記録は経路が 1 つしかない `service/AuthTokenService`（`POST /api/auth/token` の実装）の中で
+行う。イベントに寄せる利点（記録し忘れを防ぐ）より、記録元を自分たちが制御する 1 箇所に閉じる利点
+（記録しすぎを防ぐ）が上回るという判断である。
 
 **先に決めた判断**
 
@@ -261,8 +273,9 @@
 - `AuditedEntityCoverageTest` — `domain` 配下の全 `@Entity` を走査し、`AuditLog` 自身を除く
   すべてが `AuditedEntity` の実装と `@EntityListeners(EntityAuditListener.class)` を
   備えていることを検証する（新エンティティの付け忘れはビルドで落ちる）。
-- `AuthenticationEventPublishingTest` — 認証イベントの発行配線が外れていないことを検証する
-  （外れるとリスナのユニットテストは通ったまま認証の記録だけが静かに止まるため）。
+- `AuthenticationAuditScopeTest` — 実物のフィルタチェーン上で認証記録の**過不足の両方**を固定する
+  （通常の API 呼び出しでは 1 件も記録しないこと／トークン発行では成功・失敗とも記録し、
+  渡すのはユーザー名だけでパスワードは渡さないこと）。上記 1・2 の再発を防ぐ検出網。
 - `AuditLogPersistenceTest` — 本物の PostgreSQL 上で実際に行が書かれることを検証する
   （JPA リスナの生成と依存注入という、実行時にしか成立しない配線の唯一の砦）。
 - `AuditActionTest` — 操作種別の定数名が `action` 列長に収まることを検証する。

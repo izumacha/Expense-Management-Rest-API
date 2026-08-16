@@ -72,6 +72,32 @@ class TextSanitizerTest {
         assertThat(TextSanitizer.sanitize(null, MAX_LENGTH)).isEqualTo("null");
     }
 
+    // 上限がサロゲートペア（絵文字など）の途中に落ちるとき、ペアを割らずに切ることを検証する。
+    // 割ると単独サロゲート＝正しい UTF-8 に変換できない値が残り、DB への保存が失敗しうる。
+    // その失敗は fail-open で握られるため、攻撃者が上限ちょうどにペアが跨がるユーザー名を
+    // 送るだけで自分のログイン失敗記録だけを消せてしまう（監査の目的が破られる）
+    @Test
+    void サロゲートペアの途中では切らない() {
+        // 上限ちょうどの位置にペアが跨がる文字列を作る（"a" が MAX_LENGTH-1 個 ＋ 絵文字 1 文字）
+        String value = "a".repeat(MAX_LENGTH - 1) + "😀";
+        // 上限で無害化する（素朴に切ると絵文字の前半だけが残る）
+        String sanitized = TextSanitizer.sanitize(value, MAX_LENGTH);
+        // ペアを割らないよう 1 文字手前で切られていることを検証する
+        assertThat(sanitized).isEqualTo("a".repeat(MAX_LENGTH - 1));
+        // 単独サロゲートが残っていない（＝正しい UTF-8 に変換できる）ことを検証する。
+        // chars() は char を int に広げて渡すため、判定の前に char へ戻す
+        assertThat(sanitized.chars().anyMatch(c -> Character.isSurrogate((char) c))).isFalse();
+    }
+
+    // 上限内に収まるサロゲートペアはそのまま残ることを検証する（切りすぎていないことの確認）
+    @Test
+    void 上限内のサロゲートペアはそのまま残る() {
+        // ペア全体が上限内に収まる文字列を作る（絵文字 1 文字＝2 char）
+        String value = "😀ab";
+        // 十分に大きい上限で無害化しても値が変わらないことを検証する
+        assertThat(TextSanitizer.sanitize(value, MAX_LENGTH)).isEqualTo(value);
+    }
+
     // 負の上限は呼び出し側の設定ミスなので、黙って動かさず例外で知らせることを検証する
     @Test
     void 負の上限は例外になる() {

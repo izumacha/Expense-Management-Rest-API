@@ -1,8 +1,16 @@
 // リポジトリのテストパッケージ
 package com.izumacha.expensetracker.repository;
 
+// 監査ログの「誰が」を解決するコンポーネント
+import com.izumacha.expensetracker.audit.AuditActorResolver;
+// 監査ログを独立トランザクションで書き込むコンポーネント
+import com.izumacha.expensetracker.audit.AuditLogWriter;
+// 監査ログを「いつ書くか」を決めるコンポーネント
+import com.izumacha.expensetracker.audit.AuditRecorder;
 // 組込 DB への自動置換を制御するアノテーション
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+// スライステストへ追加の Bean を読み込ませるアノテーション
+import org.springframework.context.annotation.Import;
 // JPA リポジトリ層だけを読み込むスライステスト
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 // テスト実行時にプロパティを動的登録するためのレジストリ
@@ -16,6 +24,15 @@ import org.testcontainers.containers.PostgreSQLContainer;
 @DataJpaTest
 // 組込 DB への自動置換を無効化し、下記の本物の PostgreSQL を使わせる
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+// 監査ログの記録に必要な Bean を読み込む。
+// 【なぜ全リポジトリテストに必要か】エンティティの保存・削除は監査リスナ（EntityAuditListener）を
+// 必ず通る。@DataJpaTest は @Component を拾わないため、これらを読み込まないとリスナが記録先を
+// 取得できず、保存のたびに「監査ログの記録を開始できませんでした」という WARN が出る。
+// 本番の異常を知らせるための唯一の合図が、正常なテスト実行のたびに大量に出ると、
+// 読み手はその文言を無視するようになる（狼少年）。実物を読み込んで空振りを無くす。
+// なお通常のリポジトリテストはトランザクションがロールバックされるため、記録は
+// コミット後にしか走らない設計上、監査ログの行が増えて他の検証を乱すことはない
+@Import({AuditRecorder.class, AuditLogWriter.class, AuditActorResolver.class})
 abstract class AbstractRepositoryTest {
 
     // 全テストクラスで共有する単一の PostgreSQL 16 コンテナ（シングルトン・パターン）

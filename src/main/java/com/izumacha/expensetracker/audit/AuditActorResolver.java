@@ -30,7 +30,8 @@ import org.springframework.stereotype.Component;
  * （fail-open。監査の失敗で業務処理を止めない方針。{@link AuditRecorder} の説明を参照）。
  *
  * <p><b>なぜ無害化するか</b>: 値は自前で署名した JWT 由来なので通常は安全だが、
- * actor 列には認証<b>失敗</b>時に外部から送られたユーザー名も入る（{@link AuthenticationAuditListener}）。
+ * actor 列には認証<b>失敗</b>時に外部から送られたユーザー名も入る
+ * （{@code service.AuthTokenService} → {@link AuditRecorder#recordAuthentication}）。
  * 「actor に入る値は必ず無害化・切り詰め済み」という不変条件を経路ごとに揺らさないため、
  * こちらの経路でも同じ処理を通す（多層防御 ＋ 読み手が経路を追わなくても列の性質が分かる）。
  */

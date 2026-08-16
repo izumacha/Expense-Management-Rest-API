@@ -15,6 +15,8 @@ import org.springframework.context.annotation.ClassPathScanningCandidateComponen
 import org.springframework.core.type.filter.AnnotationTypeFilter;
 // 走査結果のクラス定義を表す型
 import org.springframework.beans.factory.config.BeanDefinition;
+// 注釈付きクラス定義（走査対象の判定を上書きするために使う）
+import org.springframework.beans.factory.annotation.AnnotatedBeanDefinition;
 // 走査結果を集める入れ物
 import java.util.ArrayList;
 // 走査結果を集める入れ物のインターフェース
@@ -33,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 残らない</b>という状態が静かに成立してしまう。監査ログは「記録が無い＝何も起きていない」と
  * 読まれる性質のものなので、この漏れは監査そのものの信頼性を壊す。
  *
- * <p>そこでドメインパッケージ配下の {@code @Entity} をすべて走査し、監査ログ自身
+ * <p>そこでアプリのパッケージ配下の {@code @Entity} をすべて走査し、監査ログ自身
  * （{@link AuditLog}）を除く全エンティティが 2 つの目印を備えていることを検証する。
  * エンティティを追加した時点でこのテストが落ちるため、付け忘れはビルドで止まる。
  *
@@ -41,24 +43,37 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class AuditedEntityCoverageTest {
 
-    // 走査対象のパッケージ（エンティティはすべてここに置く規約）
-    private static final String DOMAIN_PACKAGE = "com.izumacha.expensetracker.domain";
+    // 走査対象のパッケージ（アプリ全体の起点）。
+    // domain 配下に限定しないのは、規約から外れた場所に置かれたエンティティこそ
+    // 監査対象の付け忘れが起きやすく、検出網から外れては意味がないため
+    private static final String APPLICATION_PACKAGE = "com.izumacha.expensetracker";
 
     // 監査記録そのものを表すエンティティは、自分自身の変更を記録する必要がないため対象外にする
     // （記録するとログを書くたびにログが増える無限連鎖になる）
     private static final Class<?> AUDIT_LOG_ENTITY = AuditLog.class;
 
-    // ドメインパッケージ配下のすべての @Entity クラスを集めて返す
+    // アプリのパッケージ配下のすべての @Entity クラスを集めて返す
     private List<Class<?>> findEntityClasses() {
-        // 既定のフィルタを使わないスキャナを用意する（@Component 等を拾わないようにするため）
+        // 既定のフィルタを使わないスキャナを用意する（@Component 等を拾わないようにするため）。
+        // 併せて候補の判定を上書きし、抽象クラスも拾えるようにする。
+        // 【なぜ上書きが要るか】既定の判定は「具象クラスであること」を要求するため、
+        // JPA の継承マッピングで使う抽象 @Entity（マップされた状態を持つ基底クラス）が
+        // 黙って走査から漏れる。漏れれば付け忘れを検出できず、この検出網の意味が無くなる
         ClassPathScanningCandidateComponentProvider scanner =
-                new ClassPathScanningCandidateComponentProvider(false);
-        // 抽象クラスも含めて拾えるよう、@Entity が付いていることだけを条件にする
+                new ClassPathScanningCandidateComponentProvider(false) {
+                    // 候補かどうかの判定を上書きする
+                    @Override
+                    protected boolean isCandidateComponent(AnnotatedBeanDefinition beanDefinition) {
+                        // 抽象・具象を問わず、include フィルタに合致したものはすべて候補にする
+                        return true;
+                    }
+                };
+        // @Entity が付いていることを走査の条件にする
         scanner.addIncludeFilter(new AnnotationTypeFilter(Entity.class));
         // 見つかったクラスを集める入れ物を用意する
         List<Class<?>> entityClasses = new ArrayList<>();
-        // ドメインパッケージを走査して候補を 1 件ずつ処理する
-        for (BeanDefinition definition : scanner.findCandidateComponents(DOMAIN_PACKAGE)) {
+        // アプリのパッケージを走査して候補を 1 件ずつ処理する
+        for (BeanDefinition definition : scanner.findCandidateComponents(APPLICATION_PACKAGE)) {
             // クラス名を取り出す
             String className = definition.getBeanClassName();
             // クラス名からクラスオブジェクトを解決する

@@ -77,10 +77,7 @@ class ApiUserConfigValidationTest {
             // ユーザーストア Bean が組み立てられることを確認する（ユーザー名でユーザーを引ける）
             config.apiUserDetailsService().loadUserByUsername(VALID_NAME);
             // 認証マネージャ Bean が組み立てられることを確認する
-            // （第 3 引数のイベント発行器は、監査ログへ認証イベントを流すための配線。
-            //   ここでは組み立てられることだけを見るので、何もしない発行器を渡す。
-            //   発行そのものの検証は AuthenticationEventPublishingTest が担当する）
-            config.authenticationManager(config.apiUserDetailsService(), config.passwordEncoder(), event -> { });
+            config.authenticationManager(config.apiUserDetailsService(), config.passwordEncoder());
         })
                 // どの例外も発生しないことを検証する
                 .doesNotThrowAnyException();

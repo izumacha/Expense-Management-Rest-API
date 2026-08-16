@@ -62,7 +62,7 @@ import lombok.NoArgsConstructor;
 // それぞれに複合インデックスを用意して全件走査（sequential scan）を避ける（共通規約 §8）。
 // 監査ログは追記のみで際限なく増えるテーブルであり、行数が増えるほどインデックスの有無が効く。
 // 注: スキーマは ddl-auto 管理のため、この定義が自動で反映されるのは新規作成スキーマのみ
-// （既存 DB では docs/backup.md の DDL を手動適用する）。
+// （既存 DB では README「監査ログの確認」に載せた DDL を手動適用する）。
 @Table(name = "audit_logs", indexes = {
     @Index(name = "idx_audit_logs_occurred_at", columnList = "occurred_at"),
     @Index(name = "idx_audit_logs_entity", columnList = "entity_name, entity_id")
@@ -128,9 +128,10 @@ public class AuditLog {
     /**
      * 監査ログ 1 行を組み立てる。
      *
-     * <p>各引数は呼び出し元（{@code audit.AuditEntry}）で既に無害化・切り詰め済みであることを
-     * 前提とする。ここで再度切り詰めないのは、切り詰め規則を 2 箇所に持つと片方だけ変わった
-     * ときに列長超過で保存が落ちるためで、規則の所在を呼び出し元 1 箇所に保つ（§6）。
+     * <p>各引数は呼び出し元（{@code audit.AuditRecorder}。actor の解決は
+     * {@code audit.AuditActorResolver}）で既に無害化・切り詰め済みであることを前提とする。
+     * ここで再度切り詰めないのは、切り詰め規則を 2 箇所に持つと片方だけ変わったときに
+     * 列長超過で保存が落ちるためで、規則の所在を呼び出し元 1 箇所に保つ（§6）。
      *
      * @param entityName 操作対象の種類（null 不可）
      * @param entityId   操作対象の主キー文字列（対象行が無いイベントでは null）

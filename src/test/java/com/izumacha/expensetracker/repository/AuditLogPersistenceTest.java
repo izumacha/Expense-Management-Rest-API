@@ -3,12 +3,8 @@ package com.izumacha.expensetracker.repository;
 
 // 監査ログの操作種別を参照する
 import com.izumacha.expensetracker.audit.AuditAction;
-// 監査ログの「誰が」を解決するコンポーネント（Bean として読み込ませる）
+// 監査ログの「誰が」を解決するコンポーネント（期待値の定数を参照する）
 import com.izumacha.expensetracker.audit.AuditActorResolver;
-// 監査ログを独立トランザクションで書き込むコンポーネント（Bean として読み込ませる）
-import com.izumacha.expensetracker.audit.AuditLogWriter;
-// 監査ログを「いつ書くか」を決めるコンポーネント（Bean として読み込ませる）
-import com.izumacha.expensetracker.audit.AuditRecorder;
 // 監査ログのエンティティを参照する
 import com.izumacha.expensetracker.domain.AuditLog;
 // カテゴリエンティティ（監査対象の代表として使う）
@@ -21,8 +17,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 // 依存を注入するアノテーション
 import org.springframework.beans.factory.annotation.Autowired;
-// スライステストへ追加の Bean を読み込ませるアノテーション
-import org.springframework.context.annotation.Import;
 // トランザクションの伝播方法を指定する列挙
 import org.springframework.transaction.annotation.Propagation;
 // テストのトランザクション制御に使うアノテーション
@@ -52,8 +46,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>Docker が必要</b>: 基底クラスが Testcontainers で PostgreSQL を起動する
  * （CLAUDE.md §2 のとおり、Docker が無い環境では初期化エラーになる）。
  */
-// 監査ログの記録に必要な Bean はスライステストの対象外なので明示的に読み込む
-@Import({AuditRecorder.class, AuditLogWriter.class, AuditActorResolver.class})
 // テスト側のトランザクションを無効にして、リポジトリ呼び出しごとに実際にコミットさせる
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AuditLogPersistenceTest extends AbstractRepositoryTest {

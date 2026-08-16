@@ -18,6 +18,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 // Web スライステストを有効化するアノテーション
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+// 監査ログの記録先（AuthTokenService の依存。モックとして差し込む）
+import com.izumacha.expensetracker.audit.AuditRecorder;
+// 依存をモック Bean として差し込むアノテーション
+import org.springframework.boot.test.mock.mockito.MockBean;
 // 実物の設定クラス・サービスをスライスへ読み込むアノテーション
 import org.springframework.context.annotation.Import;
 // テスト実行時に動的な値でプロパティを与える仕組み（bcrypt ハッシュを実行時生成するために使う）
@@ -79,6 +83,12 @@ class AuthControllerTest {
     // 擬似 HTTP リクエストを送るクライアント
     @Autowired
     private MockMvc mockMvc;
+
+    // AuthTokenService が認証の成否を記録するために依存する監査ログの入口。
+    // 本テストの関心はトークン発行の応答契約なので、記録先はモックにして DB を持ち込まない
+    // （記録の内容そのものは AuthenticationAuditScopeTest が検証する）
+    @MockBean
+    private AuditRecorder auditRecorder;
 
     // 発行されたトークンの中身（署名・主体）を検証するためのデコーダ（JwtConfig の実物）
     @Autowired
