@@ -72,7 +72,6 @@ docker compose up --build        # PostgreSQL + アプリを一括起動（推�
 - 変更の検知は**永続化フック**（`@EntityListeners(EntityAuditListener.class)`）に寄せる。サービス層で 1 メソッドずつ記録しない（新しい保存経路での書き忘れを防ぐため）。
 - **新しいエンティティを追加したら** `AuditedEntity` の実装と `@EntityListeners(EntityAuditListener.class)` を必ず付ける（付け忘れは `AuditedEntityCoverageTest` が検出する）。
 - `Expense` / `Category` に JPQL/SQL の一括更新・削除（`@Modifying`）を導入しない。永続化コンテキストを迂回してコールバックが発火せず、監査漏れになる。必要な場合は監査記録も同時に設計する。
-- **監査対象エンティティを保存するメソッドに `@Transactional(propagation = REQUIRES_NEW)` を付けない。** `AuditRecorder` はコミット後に書く記録候補をスレッドへ結び付けて持ち回るが、Spring が内側のトランザクション開始時に退避するのは自分が管理する資源だけで、この入れ物は退避されない。結果、内側の変更が外側の記録に混ざり、内側だけコミットされると記録が落ち、内側だけロールバックされると起きていない変更が記録される。必要になったら `AuditRecorder` の持ち回り方から設計し直す。
 - 監査ログには**値そのもの（金額・説明・カテゴリ名）を保存しない**。記録するのは「いつ・誰が・どの行に・どの操作をしたか」まで（家計情報を監査テーブルへ複製しないため）。パスワード・トークンは当然記録しない。
 - 書き込みは**コミット後・fail-open**（失敗しても業務処理を止めず WARN ログのみ）。この方針を変えるときは `docs/issue-analysis.md` の追加所見 A.1「対応の記録」も同じ PR で更新する。
 - `AuditLog` にセッターを足さない（追記専用を型のレベルで保つ）。

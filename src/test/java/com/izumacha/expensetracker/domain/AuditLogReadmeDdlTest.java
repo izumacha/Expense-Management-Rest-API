@@ -17,14 +17,10 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 // 解析結果を集める入れ物
 import java.util.ArrayList;
-// 解析結果を名前で引くための入れ物
-import java.util.LinkedHashMap;
 // 重複していない名前を集めるための入れ物
 import java.util.LinkedHashSet;
 // 解析結果の一覧を扱うインターフェース
 import java.util.List;
-// 名前で引ける解析結果を扱うインターフェース
-import java.util.Map;
 // 集合を扱うインターフェース
 import java.util.Set;
 // Hibernate が組み立てたマッピング情報（列名・型・インデックスの正本）
@@ -100,8 +96,11 @@ class AuditLogReadmeDdlTest {
      */
     private static final Path README_PATH = Path.of("README.md");
 
-    // Markdown のコードフェンス（DDL ブロックの終わりを示す）
+    // Markdown のコードフェンス（コードブロックの終わりを示す）
     private static final String CODE_FENCE = "```";
+
+    // SQL のコードブロックの開きフェンス（DDL が書かれている塊を見分けるために使う）
+    private static final String SQL_CODE_FENCE = "```sql";
 
     // 以降は DDL の語彙。散らばると解釈できる書き方を増やすときに拾い漏れるため定数に集約する（§6）
     // テーブル定義の開始を示す語
@@ -340,18 +339,23 @@ class AuditLogReadmeDdlTest {
         Set<String> identityColumns = new LinkedHashSet<>();
         // エンティティ本体から親クラスへ順に遡って確認する
         for (Class<?> type = AuditLog.class; type != null && type != Object.class; type = type.getSuperclass()) {
-            // そのクラスが宣言しているフィールドを 1 つずつ確認する
-            for (Field field : type.getDeclaredFields()) {
+            // フィールドとメソッドの両方を見る。
+            // 【なぜメソッドも見るか】JPA は注釈をフィールドに付ける形（フィールドアクセス）と
+            // ゲッターに付ける形（プロパティアクセス）の両方を認めている。フィールドだけを見ると、
+            // ゲッターに付け替えられた時点で期待値が空になり、README の識別列指定が余分に見える。
+            // 赤いテストを通す自然な手当ては README から指定を消すことだが、そうすると本番の
+            // 主キーに既定値が無くなり監査ログの挿入だけが常に失敗する（fail-open なので気付けない）
+            for (java.lang.reflect.AnnotatedElement member : annotatedMembers(type)) {
                 // 主キーでなければ対象外
-                if (!field.isAnnotationPresent(Id.class)) {
-                    // 次のフィールドへ進む
+                if (!member.isAnnotationPresent(Id.class)) {
+                    // 次のメンバへ進む
                     continue;
                 }
                 // 採番方式の指定を取り出す
-                GeneratedValue generatedValue = field.getAnnotation(GeneratedValue.class);
+                GeneratedValue generatedValue = member.getAnnotation(GeneratedValue.class);
                 // DB 側の自動採番（IDENTITY）でなければ識別列にはならない
                 if (generatedValue == null || generatedValue.strategy() != GenerationType.IDENTITY) {
-                    // 次のフィールドへ進む
+                    // 次のメンバへ進む
                     continue;
                 }
                 // 単一列の主キーであることを前提に、Hibernate が決めた主キーの列名を識別列とする
@@ -362,18 +366,79 @@ class AuditLogReadmeDdlTest {
         return identityColumns;
     }
 
+    /** 注釈が付きうるメンバ（フィールドとメソッド）をまとめて返す。 */
+    private static List<java.lang.reflect.AnnotatedElement> annotatedMembers(Class<?> type) {
+        // メンバを集める入れ物
+        List<java.lang.reflect.AnnotatedElement> members = new ArrayList<>();
+        // そのクラスが宣言しているフィールドを加える
+        for (Field field : type.getDeclaredFields()) {
+            // フィールドを加える
+            members.add(field);
+        }
+        // そのクラスが宣言しているメソッド（ゲッター）を加える
+        for (java.lang.reflect.Method method : type.getDeclaredMethods()) {
+            // メソッドを加える
+            members.add(method);
+        }
+        // 集めたメンバを返す
+        return members;
+    }
+
     // ------------------------------------------------------------------
     // README 側の読み取り
     // ------------------------------------------------------------------
 
-    /** README の手書き DDL を読み取り、正本と同じ形のスキーマにして返す。 */
+    /**
+     * README の手書き DDL を読み取り、正本と同じ形のスキーマにして返す。
+     *
+     * <p><b>ブロックの中身は 1 文残らず見る</b>。以前は「{@code create table} の位置から読み始める」
+     * 実装だったため、その<b>手前</b>に置かれた文（{@code ALTER TABLE ... ADD CONSTRAINT} など）が
+     * 誰にも見られないまま通っていた。同じ文が後ろにあれば拒否されるのに前にあれば通る、という
+     * 位置任せの穴だったので、ブロック全体を文に分けてから種類ごとに振り分ける。
+     */
     private static Schema parseReadmeSchema(String expectedTableName) {
         // DDL ブロックを切り出す（小文字にそろえてあるので以降は大小文字を気にしない）
-        String ddl = readDdlBlock(expectedTableName);
-        // 列定義を囲む丸括弧の開き位置を求める
-        int open = ddl.indexOf('(');
-        // 対応する閉じ括弧を求める
-        int close = matchingParenthesis(ddl, open);
+        String block = readDdlBlock(expectedTableName);
+        // テーブル定義の本体（括弧の内側）と、インデックス定義の文を仕分ける
+        String tableBody = null;
+        // インデックス定義の文だけを集める入れ物
+        List<String> indexStatements = new ArrayList<>();
+        // ブロックを「;」で文に分けて 1 つずつ振り分ける
+        for (String rawStatement : block.split(";")) {
+            // 前後の空白を落とす
+            String statement = rawStatement.trim();
+            // 空の断片は読み飛ばす
+            if (statement.isEmpty()) {
+                // 次の文へ進む
+                continue;
+            }
+            // テーブル定義なら括弧の内側を取り出して覚えておく
+            if (statement.startsWith(CREATE_TABLE_KEYWORD)) {
+                // 列定義を囲む丸括弧の開き位置を求める
+                int tableOpen = statement.indexOf('(');
+                // 対応する閉じ括弧を求める
+                int tableClose = matchingParenthesis(statement, tableOpen);
+                // 括弧の内側を本体として覚えておく
+                tableBody = statement.substring(tableOpen + 1, tableClose);
+                // 次の文へ進む
+                continue;
+            }
+            // インデックス定義なら後でまとめて解析する
+            if (statement.startsWith(CREATE_KEYWORD)) {
+                // 文を覚えておく
+                indexStatements.add(statement);
+                // 次の文へ進む
+                continue;
+            }
+            // どちらでもない文（ALTER TABLE ... ADD CONSTRAINT / DROP など）は
+            // 正本と突き合わせる術が無い。読み飛ばすと制約の追加が素通りするので止める
+            rejectUnsupported("インデックス定義以外の文", statement);
+        }
+        // テーブル定義が見つからないのは、切り出しが壊れているということなので握り潰さず失敗させる
+        if (tableBody == null) {
+            // 何が無かったかを示して停止する
+            throw new IllegalStateException("README の DDL ブロックに " + expectedTableName + " のテーブル定義がありません");
+        }
         // 列の定義を集める入れ物
         List<ColumnDefinition> columns = new ArrayList<>();
         // 主キーを構成する列名を集める入れ物
@@ -381,7 +446,7 @@ class AuditLogReadmeDdlTest {
         // 識別列の名前を集める入れ物
         Set<String> identityColumns = new LinkedHashSet<>();
         // 括弧の内側をカンマで区切り、1 項目ずつ処理する
-        for (String rawItem : splitTopLevel(ddl.substring(open + 1, close))) {
+        for (String rawItem : splitTopLevel(tableBody)) {
             // 型の括弧の中にある空白を落として、語の分割で型が割れないようにする
             String item = removeWhitespaceInsideParentheses(rawItem.trim());
             // 空の項目（末尾のカンマなど）は読み飛ばす
@@ -393,24 +458,19 @@ class AuditLogReadmeDdlTest {
             String[] tokens = item.split("\\s+");
             // 先頭の語が制約の語なら、これは列ではなく表制約（PRIMARY KEY (id) など）
             if (CONSTRAINT_KEYWORDS.contains(tokens[0])) {
-                // 主キーは対象列を拾って比較に使う
-                if (item.startsWith(PRIMARY_KEY_KEYWORD)) {
+                // 主キーは対象列を拾って比較に使う。
+                // 判定には語をつなぎ直した文字列を使う（元の文字列のままだと、改行や空白 2 つで
+                // 区切った `PRIMARY\n    KEY (id)` という正しい書き方を「扱えない制約」として
+                // 落としてしまい、しかも直しようのない指示を出すことになる）
+                if (String.join(" ", tokens).startsWith(PRIMARY_KEY_KEYWORD)) {
                     // 制約が囲む列名を主キーとして加える
                     primaryKeyColumns.addAll(parseColumnList(item));
                     // 次の項目へ進む
                     continue;
                 }
                 // 主キー以外の表制約は、この検証が正本側と突き合わせる術を持たない。
-                // 【なぜ黙って読み飛ばさないか】読み飛ばすと、エンティティに無い制約を README に
-                // 書いても素通りする。たとえば UNIQUE (entity_name, entity_id) を足すと、
-                // 同じ行への 2 度目の記録（CREATE のあとの UPDATE）が一意制約に弾かれ、
-                // 監査ログの書き込みは fail-open なので WARN だけ出して記録が落ちる。
-                // validate も制約は見ないため、どこにも合図が出ないまま監査証跡が欠ける。
-                // 扱えないものは素通りさせず、検証を広げるよう促して止める
-                throw new IllegalStateException(
-                        // 何が扱えなくて、どうすればよいかを示す
-                        "README の DDL に、この検証が扱えない表制約が含まれています: " + item
-                                + "（正本側と突き合わせる方法を AuditLogReadmeDdlTest に追加してください）");
+                // 読み飛ばすとエンティティに無い制約が本番だけに入り、監査記録が静かに欠ける
+                rejectUnsupported("表制約", item);
             }
             // 列名と型の 2 語は最低限必要なので、足りなければ解析できていない
             assertThat(tokens.length)
@@ -467,7 +527,7 @@ class AuditLogReadmeDdlTest {
             columns.add(new ColumnDefinition(name, sqlType, modifiers.contains(NOT_NULL_KEYWORD)));
         }
         // インデックス定義を解析する
-        List<IndexDefinition> indexes = parseIndexes(ddl.substring(close), expectedTableName);
+        List<IndexDefinition> indexes = parseIndexes(indexStatements, expectedTableName);
         // 読み取ったスキーマを返す（主キーの反映を終えた列を渡す）
         return new Schema(expectedTableName, applyPrimaryKeyNotNull(columns, primaryKeyColumns),
                 primaryKeyColumns, indexes, identityColumns);
@@ -517,65 +577,67 @@ class AuditLogReadmeDdlTest {
             // どのファイルが読めなかったかを添えて停止する
             throw new IllegalStateException("README を読み取れません: " + README_PATH.toAbsolutePath(), e);
         }
-        // 正本のテーブル名を持つテーブル定義の開始位置を集める入れ物。
-        // 【なぜ全部集めるか】README は日英 2 言語なので、英語側にも同じ DDL が写されることがありうる。
-        // 最初の 1 つだけを見ていると、2 つ目の写しは誰にも検証されないまま古くなり、
-        // 英語だけを読む運用者に古い DDL を渡す。逆に「別のテーブルの DDL が増えた」だけで
-        // 落としてはいけない（この走査は取り違えないためにテーブル名で選んでいる）
-        List<Integer> matches = new ArrayList<>();
-        // 最初のテーブル定義を探す
-        int cursor = readme.indexOf(CREATE_TABLE_KEYWORD);
-        // 見つからなくなるまで 1 文ずつ確認する
-        while (cursor >= 0) {
-            // 列定義を囲む丸括弧の開き位置を探す（テーブル名はこの手前にある）
-            int paren = readme.indexOf('(', cursor);
-            // 開き括弧が無ければこれ以上たどれないので打ち切る
-            if (paren < 0) {
+        // README 内の SQL コードブロックのうち、対象テーブルに言及しているものを集める。
+        // 【なぜブロック単位で数えるか】README は日英 2 言語なので、同じ DDL が別の場所へ写される
+        // ことがありうる。「create table の個数」だけを数えていると、索引定義だけを写した
+        // 2 つ目のブロック（`CREATE INDEX ... ON audit_logs (...)` だけの塊）が誰にも検証されない
+        // まま古くなり、それを見た運用者が本番に誤った索引を作る。ブロック単位で見れば、
+        // どんな形の写しでも「対象テーブルに触れる SQL ブロックは 1 つだけ」で捕まえられる
+        List<String> blocks = new ArrayList<>();
+        // SQL コードブロックの開き位置を探す
+        int fence = readme.indexOf(SQL_CODE_FENCE);
+        // 見つからなくなるまで 1 ブロックずつ確認する
+        while (fence >= 0) {
+            // 開きフェンスの行末（＝中身の開始位置）を探す
+            int contentStart = readme.indexOf('\n', fence);
+            // 行末が無ければ壊れているので打ち切る
+            if (contentStart < 0) {
                 // 探索を終える
                 break;
             }
-            // 「create table」と開き括弧の間にある語を取り出す
-            String tableName = readme.substring(cursor + CREATE_TABLE_KEYWORD.length(), paren).trim();
-            // 再実行可能にするための指定が付いていれば取り除く
-            if (tableName.startsWith(IF_NOT_EXISTS_KEYWORD)) {
-                // 指定を落として残りをテーブル名とする
-                tableName = tableName.substring(IF_NOT_EXISTS_KEYWORD.length()).trim();
+            // 閉じフェンスを探す
+            int contentEnd = readme.indexOf(CODE_FENCE, contentStart);
+            // 閉じフェンスが無ければ Markdown が壊れているので失敗させる
+            assertThat(contentEnd)
+                    // 失敗時に何が起きたかを示す
+                    .as("README の SQL ブロックを閉じるコードフェンス（%s）が見つかりません", CODE_FENCE)
+                    // 見つかった位置は 0 以上になる
+                    .isNotNegative();
+            // 中身を取り出す
+            String content = readme.substring(contentStart + 1, contentEnd);
+            // 対象テーブルに言及しているブロックだけを候補に加える
+            if (content.contains(expectedTableName)) {
+                // 中身を候補に加える
+                blocks.add(content);
             }
-            // 正本と完全に一致したものだけを候補として覚えておく（別テーブルの DDL は無視する）
-            if (tableName.equals(expectedTableName)) {
-                // 開始位置を候補に加える
-                matches.add(cursor);
-            }
-            // 次のテーブル定義を探す
-            cursor = readme.indexOf(CREATE_TABLE_KEYWORD, cursor + CREATE_TABLE_KEYWORD.length());
+            // 次の SQL ブロックを探す
+            fence = readme.indexOf(SQL_CODE_FENCE, contentEnd);
         }
-        // 正本のテーブル名を持つ DDL が無い＝本番への適用手順が失われている（またはテーブル名がずれた）
-        if (matches.isEmpty()) {
+        // 対象テーブルに触れる SQL ブロックが無い＝本番への適用手順が失われている
+        if (blocks.isEmpty()) {
             // 何が無くて、どう直せばよいかを示して停止する
             throw new IllegalStateException(
-                    "README に「" + CREATE_TABLE_KEYWORD + " " + expectedTableName + "」が見つかりません"
+                    "README に " + expectedTableName + " の DDL が見つかりません"
                             + "（本番へ手動適用する DDL が失われていないか、テーブル名が @Table とずれていないか確認してください）");
         }
-        // 同じテーブルの DDL が 2 つ以上あれば、検証されない方が古くなるので止める
-        assertThat(matches)
+        // 写しが増えると検証されない方が古くなるので、1 つだけであることを確かめる
+        assertThat(blocks)
                 // 失敗時に何が起きているかと直し方を示す
-                .as("README に %s の DDL が複数あります"
+                .as("README に %s に触れる SQL ブロックが複数あります"
                         + "（写しが増えると検証されない方が古くなります。1 箇所にまとめてください）",
                         expectedTableName)
                 // 写しが 1 つだけであることを検証する
                 .hasSize(1);
-        // 唯一の開始位置を取り出す
-        int start = matches.get(0);
-        // DDL ブロックの終わり（次のコードフェンス）を探す
-        int end = readme.indexOf(CODE_FENCE, start);
-        // 閉じフェンスが無ければ Markdown が壊れているので失敗させる
-        assertThat(end)
-                // 失敗時に何が起きたかを示す
-                .as("README の DDL ブロックを閉じるコードフェンス（%s）が見つかりません", CODE_FENCE)
-                // 見つかった位置は 0 以上になる
-                .isNotNegative();
-        // 開始位置から閉じフェンスの手前までを DDL 本体とし、コメントを落として返す
-        return removeLineComments(readme.substring(start, end));
+        // 唯一のブロックからコメントを落として返す
+        String block = removeLineComments(blocks.get(0));
+        // 対象テーブルのテーブル定義が含まれていることを確かめる（索引だけの写しを本体と誤認しない）
+        assertThat(block)
+                // 失敗時に何が無いかを示す
+                .as("README の SQL ブロックに %s %s がありません", CREATE_TABLE_KEYWORD, expectedTableName)
+                // テーブル定義が含まれることを検証する
+                .contains(CREATE_TABLE_KEYWORD);
+        // 解析対象のブロックを返す
+        return block;
     }
 
     /**
@@ -609,29 +671,11 @@ class AuditLogReadmeDdlTest {
      * 正しい README の書き方がこの検証を通せないと、<b>まっとうなスキーマ変更のたびにテスト側を
      * 直さないと進めなくなる</b>ため。逆向き（README にだけ一意インデックスが残る）も見逃さない。
      */
-    private static List<IndexDefinition> parseIndexes(String ddl, String expectedTableName) {
+    private static List<IndexDefinition> parseIndexes(List<String> statements, String expectedTableName) {
         // 解析結果を集める入れ物
         List<IndexDefinition> indexes = new ArrayList<>();
-        // 「;」で文に分けて 1 つずつ処理する
-        for (String rawStatement : ddl.split(";")) {
-            // 前後の空白を落とす
-            String statement = rawStatement.trim();
-            // CREATE TABLE の閉じ括弧だけが残った断片は文ではないので読み飛ばす
-            if (statement.equals(")")) {
-                // 次の文へ進む
-                continue;
-            }
-            // 空行だけの断片も読み飛ばす
-            if (statement.isEmpty()) {
-                // 次の文へ進む
-                continue;
-            }
-            // インデックス定義以外の文（ALTER TABLE ... ADD CONSTRAINT / DROP など）は
-            // 正本と突き合わせる術が無い。読み飛ばすと制約の追加が素通りするので止める
-            if (!statement.startsWith(CREATE_KEYWORD)) {
-                // 何が扱えないかを示して停止する
-                rejectUnsupported("インデックス定義以外の文", statement);
-            }
+        // 仕分け済みのインデックス定義を 1 つずつ処理する
+        for (String statement : statements) {
             // 対象列を囲む丸括弧の開き位置を探す
             int open = statement.indexOf('(');
             // 開き括弧が無ければ文の形が想定と違うので失敗させる
