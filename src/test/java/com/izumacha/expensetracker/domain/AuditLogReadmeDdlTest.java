@@ -1,36 +1,52 @@
 // ドメイン（JPA エンティティ）のテストパッケージ
 package com.izumacha.expensetracker.domain;
 
-// 列の定義（名前・長さ・NOT NULL）を読み取るためのアノテーション
-import jakarta.persistence.Column;
-// 列挙をどの形式で保存するかを読み取るためのアノテーション
-import jakarta.persistence.Enumerated;
-// 列挙の保存形式（文字列か序数か）を表す列挙
-import jakarta.persistence.EnumType;
+// 主キーの採番方式（識別列かどうか）を読み取るためのアノテーション
+import jakarta.persistence.GeneratedValue;
+// 採番方式の種類を表す列挙（IDENTITY かどうかの判定に使う）
+import jakarta.persistence.GenerationType;
 // 主キーであることを判定するためのアノテーション
 import jakarta.persistence.Id;
-// テーブル名とインデックス定義を読み取るためのアノテーション
-import jakarta.persistence.Table;
 // エンティティのフィールドを走査するためのリフレクション型
 import java.lang.reflect.Field;
-// フィールドの修飾子（static かどうか）を判定するためのユーティリティ
-import java.lang.reflect.Modifier;
 // README を読むためのファイル入出力ユーティリティ
 import java.nio.file.Files;
 // README のパスを表す型
 import java.nio.file.Path;
 // 読み込み時の文字コードを明示するための型
 import java.nio.charset.StandardCharsets;
-// 日時列の型判定に使う
-import java.time.LocalDateTime;
 // 解析結果を集める入れ物
 import java.util.ArrayList;
 // 解析結果を名前で引くための入れ物
 import java.util.LinkedHashMap;
+// 重複していない名前を集めるための入れ物
+import java.util.LinkedHashSet;
 // 解析結果の一覧を扱うインターフェース
 import java.util.List;
 // 名前で引ける解析結果を扱うインターフェース
 import java.util.Map;
+// 集合を扱うインターフェース
+import java.util.Set;
+// Hibernate が組み立てたマッピング情報（列名・型・インデックスの正本）
+import org.hibernate.boot.Metadata;
+// マッピング情報を組み立てる入口
+import org.hibernate.boot.MetadataSources;
+// Hibernate の各種サービスを保持するレジストリ
+import org.hibernate.boot.registry.StandardServiceRegistry;
+// 上記レジストリを組み立てるビルダ
+import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
+// Hibernate の設定キー（方言・命名規則の指定に使う）
+import org.hibernate.cfg.AvailableSettings;
+// 本番と同じ PostgreSQL の方言（型名の決定に使う）
+import org.hibernate.dialect.PostgreSQLDialect;
+// マッピング情報から取り出す列
+import org.hibernate.mapping.Column;
+// マッピング情報から取り出すインデックス
+import org.hibernate.mapping.Index;
+// マッピング情報から取り出すテーブル
+import org.hibernate.mapping.Table;
+// マッピング情報から取り出す一意制約
+import org.hibernate.mapping.UniqueKey;
 // 全テストの前に 1 度だけ実行する準備メソッドを宣言するアノテーション
 import org.junit.jupiter.api.BeforeAll;
 // テストメソッドを宣言するアノテーション
@@ -40,13 +56,13 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * README に載せた {@code audit_logs} の手書き DDL が、{@link AuditLog} の定義とずれていないことを
+ * README に載せた {@code audit_logs} の手書き DDL が、{@link AuditLog} のマッピングとずれていないことを
  * 機械的に保証する整合性テスト。
  *
  * <p>【何を守るテストか】本番のスキーマ方針は {@code ddl-auto: validate}（DDL を自動発行しない）
  * なので、既存の本番 DB へ監査ログを導入するときは README の DDL を<b>人手で適用する</b>。
- * README 自身が「列を増やしたら両方を同じ PR で直してください」と書いているとおり、この写しは
- * 人の記憶だけで正本（{@link AuditLog}）に追随している。ずれると次の 2 通りに壊れる。
+ * README 自身が「両方を同じ PR で直してください」と書いているとおり、この写しは人の記憶だけで
+ * 正本（{@link AuditLog}）に追随している。ずれると次の 2 通りに壊れる。
  *
  * <ul>
  *   <li><b>列のずれ</b>: 起動時の {@code validate} が食い違いを検出して<b>本番の起動が失敗する</b>。
@@ -61,7 +77,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * かぎり必ず起こりうるため、{@code AuditedEntityCoverageTest} と同じ考え方で検出網を置く
  * ——人の付け忘れをビルドで止める。
  *
- * <p>DB も Spring コンテキストも起動せず、README の読み取りとリフレクションだけで完結する（§11）。
+ * <h2>期待値は Hibernate 自身に作らせる</h2>
+ * 「エンティティがどんなテーブルになるか」（列名・SQL 型・NULL 可否・インデックス）は
+ * <b>Hibernate に組み立てさせたマッピング情報から読む</b>。この対応関係を自前で書き写すと、
+ * 写し間違いがそのまま<b>誤った指示</b>になる——たとえば命名規則を自前で実装すると
+ * {@code actorIP} のようなフィールドで Hibernate（{@code actorip}）と食い違い、
+ * テストは README に {@code actor_i_p} と書けと指示し、それに従うと本番の {@code validate} が
+ * 落ちる。<b>この検出網が防ぐはずの失敗を、検出網自身が引き起こす</b>ことになる。
+ * 同じ理由で型の対応表も持たない（{@code columnDefinition} や {@code @Lob} を見落とす）。
+ * Hibernate に聞けば、命名規則・型・{@code @Transient} の除外・関連の {@code @JoinColumn} まで
+ * すべて本番と同じ答えが返る。
+ *
+ * <p>DB も Spring コンテキストも起動しない。Hibernate のマッピング組み立ては JDBC 接続なしで行う
+ * （方言を明示し、接続からのメタデータ取得を無効化する）ため、Docker の有無に関わらず動く（§11）。
  */
 class AuditLogReadmeDdlTest {
 
@@ -72,103 +100,347 @@ class AuditLogReadmeDdlTest {
      */
     private static final Path README_PATH = Path.of("README.md");
 
-    /**
-     * 解析対象の DDL を README の中から見つけるための目印。
-     *
-     * <p><b>テーブル名をここに含めない</b>のが要点。含めてしまうと、README のテーブル名を変えた
-     * ときにブロックが見つからず「README に DDL が無い」という的外れな失敗になるか、前方一致で
-     * 別名（{@code audit_logs_v2} など）を掴んで<b>素通りする</b>。テーブル名は正本（{@code @Table}）
-     * から取り、それと一致する文を探す方式にする（{@link #readDdlBlock()}）。
-     */
-    private static final String CREATE_TABLE_MARKER = "CREATE TABLE";
-
     // Markdown のコードフェンス（DDL ブロックの終わりを示す）
     private static final String CODE_FENCE = "```";
 
-    // インデックス定義の文であることを見分けるための接頭辞（一意インデックスは UNIQUE が挟まる）
-    private static final String CREATE_MARKER = "CREATE";
-
+    // 以降は DDL の語彙。散らばると解釈できる書き方を増やすときに拾い漏れるため定数に集約する（§6）
+    // テーブル定義の開始を示す語
+    private static final String CREATE_TABLE_KEYWORD = "create table";
+    // 再実行可能な DDL で使われる「既にあれば作らない」指定
+    private static final String IF_NOT_EXISTS_KEYWORD = "if not exists";
+    // 文の開始を示す語（インデックス定義の判別に使う）
+    private static final String CREATE_KEYWORD = "create";
     // 一意インデックスであることを示す語
-    private static final String UNIQUE_MARKER = "UNIQUE";
-
+    private static final String UNIQUE_KEYWORD = "unique";
     // インデックス定義であることを示す語
-    private static final String INDEX_MARKER = "INDEX";
-
-    // @Column の length 属性の既定値（JPA 仕様。属性を書かなかった列の期待長として使う）
-    private static final int DEFAULT_COLUMN_LENGTH = 255;
-
-    /**
-     * README から読み取って解析した DDL（列定義）。
-     *
-     * <p>README は 1 回の実行中に変わらないため、テストごとに読み直さず {@link #parseReadmeDdl()} で
-     * 一度だけ読み解く。読み取り・解析の失敗も 1 回の明確なエラーとして出る（各テストで 5 回
-     * 同じ失敗が並ばない）。
-     */
-    private static Map<String, DdlColumn> ddlColumns;
-
-    // README から読み取って解析した DDL（インデックス定義）
-    private static List<DdlIndex> ddlIndexes;
+    private static final String INDEX_KEYWORD = "index";
+    // インデックスの対象テーブルを示す語
+    private static final String ON_KEYWORD = "on";
+    // NULL を許さないことを示す語
+    private static final String NOT_NULL_KEYWORD = "not null";
+    // 主キーであることを示す語
+    private static final String PRIMARY_KEY_KEYWORD = "primary key";
+    // DB 側で自動採番する識別列であることを示す語
+    private static final String IDENTITY_KEYWORD = "generated by default as identity";
 
     /**
-     * README の DDL から読み取った 1 列分の定義。
+     * 列定義ではなく<b>表制約</b>の始まりを示す語。
      *
-     * @param name       列名（小文字に正規化済み）
-     * @param type       型（小文字に正規化済み。例 {@code varchar(64)}）
-     * @param notNull    {@code NOT NULL} が付いているか
-     * @param primaryKey {@code PRIMARY KEY} が付いているか
-     * @param identity   {@code GENERATED BY DEFAULT AS IDENTITY}（自動採番）が付いているか
+     * <p>{@code PRIMARY KEY (id)} のような表制約は列定義と同じくカンマ区切りで並ぶため、
+     * 区別しないと {@code primary} という名前の列があることにされてしまう。
      */
-    private record DdlColumn(String name, String type, boolean notNull, boolean primaryKey, boolean identity) {
+    private static final Set<String> CONSTRAINT_KEYWORDS =
+            Set.of("primary", "foreign", "unique", "check", "constraint", "exclude");
+
+    /**
+     * テーブル 1 つ分のスキーマ（正本側と README 側を同じ形にそろえて突き合わせる）。
+     *
+     * @param tableName          テーブル名
+     * @param columns            列の定義（宣言順）
+     * @param primaryKeyColumns  主キーを構成する列名
+     * @param indexes            インデックスの定義
+     * @param identityColumns    識別列（自動採番）として定義された列名
+     */
+    private record Schema(String tableName,
+                          List<ColumnDefinition> columns,
+                          List<String> primaryKeyColumns,
+                          List<IndexDefinition> indexes,
+                          Set<String> identityColumns) {
     }
 
     /**
-     * インデックス 1 つ分の定義（README 側の読み取り結果と、エンティティ側の期待値の両方に使う）。
+     * 列 1 つ分の定義。
      *
-     * @param name    インデックス名（小文字に正規化済み）
-     * @param columns 対象の列名（小文字に正規化済み・定義された順）
-     * @param unique  一意インデックス（{@code CREATE UNIQUE INDEX}）か
+     * @param name    列名
+     * @param sqlType SQL の型（方言つきの表記。例 {@code varchar(64)}）
+     * @param notNull NULL を許さないか（主キーは制約上必ず非 NULL とみなす）
      */
-    private record DdlIndex(String name, List<String> columns, boolean unique) {
+    private record ColumnDefinition(String name, String sqlType, boolean notNull) {
     }
 
     /**
-     * {@link AuditLog} の注釈から起こした 1 列分の期待値。
+     * インデックス 1 つ分の定義。
      *
-     * @param name    期待する列名
-     * @param type    期待する型（小文字。例 {@code varchar(64)}）
-     * @param notNull {@code NOT NULL} であるべきか
-     * @param id      主キーの列か
+     * @param name    インデックス名
+     * @param columns 対象の列名（定義された順）
+     * @param unique  一意インデックスか
      */
-    private record ExpectedColumn(String name, String type, boolean notNull, boolean id) {
+    private record IndexDefinition(String name, List<String> columns, boolean unique) {
+    }
+
+    // 正本（Hibernate のマッピング情報）から組み立てたスキーマ
+    private static Schema entitySchema;
+
+    // README の手書き DDL から読み取ったスキーマ
+    private static Schema readmeSchema;
+
+    /** 両側のスキーマを 1 度だけ用意する（README は実行中に変わらないため読み直さない）。 */
+    @BeforeAll
+    static void loadSchemas() {
+        // 正本側を Hibernate に組み立てさせる
+        entitySchema = buildEntitySchema();
+        // README 側を解析する（テーブル名は正本のものを手がかりに探す）
+        readmeSchema = parseReadmeSchema(entitySchema.tableName());
+    }
+
+    // ------------------------------------------------------------------
+    // 正本側（Hibernate のマッピング情報）
+    // ------------------------------------------------------------------
+
+    /**
+     * {@link AuditLog} が本番でどんなテーブルになるかを、Hibernate に組み立てさせて読み取る。
+     *
+     * <p>本番と同じ方言・命名規則を明示的に与えることで、返る名前と型が本番の
+     * {@code validate} が期待するものと一致する。JDBC 接続は張らない。
+     */
+    private static Schema buildEntitySchema() {
+        // Hibernate のサービスレジストリを組み立てる
+        StandardServiceRegistry registry = new StandardServiceRegistryBuilder()
+                // 本番と同じ PostgreSQL の方言を使う（型名はここで決まる）
+                .applySetting(AvailableSettings.DIALECT, PostgreSQLDialect.class.getName())
+                // DB へ接続してメタデータを取りに行かせない（接続不要でマッピングだけ組み立てる）
+                .applySetting("hibernate.boot.allow_jdbc_metadata_access", "false")
+                // Spring Boot 3 の既定と同じ物理命名規則（キャメルケース→スネークケース）を使う
+                .applySetting(AvailableSettings.PHYSICAL_NAMING_STRATEGY,
+                        "org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy")
+                // Spring Boot の既定と同じ論理命名規則を使う
+                .applySetting(AvailableSettings.IMPLICIT_NAMING_STRATEGY,
+                        "org.springframework.boot.orm.jpa.hibernate.SpringImplicitNamingStrategy")
+                // 設定を確定してレジストリを作る
+                .build();
+        // レジストリは内部でスレッドや設定を保持するため、使い終わったら必ず解放する（§8）
+        try {
+            // 監査ログのエンティティだけを対象にマッピング情報を組み立てる
+            Metadata metadata = new MetadataSources(registry)
+                    // 対象のエンティティを登録する
+                    .addAnnotatedClass(AuditLog.class)
+                    // マッピング情報を確定する
+                    .buildMetadata();
+            // 組み立てた情報から目的のテーブルを取り出してスキーマへ変換する
+            return toSchema(metadata, findTable(metadata));
+        } finally {
+            // レジストリを閉じて資源を解放する
+            StandardServiceRegistryBuilder.destroy(registry);
+        }
+    }
+
+    /** 組み立てたマッピング情報から、監査ログのテーブルを 1 つ取り出す。 */
+    private static Table findTable(Metadata metadata) {
+        // 名前空間ごとにテーブルを探す
+        for (var namespace : metadata.getDatabase().getNamespaces()) {
+            // 名前空間に含まれるテーブルを 1 つずつ確認する
+            for (Table table : namespace.getTables()) {
+                // 監査ログのエンティティしか登録していないので、最初に見つかったものが目的のテーブル
+                return table;
+            }
+        }
+        // 1 つも見つからないのはマッピングの組み立てに失敗しているので握り潰さず失敗させる（§6）
+        throw new IllegalStateException("AuditLog のマッピングからテーブルを取り出せませんでした");
+    }
+
+    /** Hibernate のテーブル情報を、README 側と突き合わせられる形へ変換する。 */
+    private static Schema toSchema(Metadata metadata, Table table) {
+        // 主キーを構成する列名を集める（主キーが無いことは想定しないが、あれば空のまま扱う）
+        List<String> primaryKeyColumns = new ArrayList<>();
+        // 主キーが定義されていれば列名を取り出す
+        if (table.getPrimaryKey() != null) {
+            // 主キーの列を 1 つずつ加える
+            for (Column column : table.getPrimaryKey().getColumns()) {
+                // 列名を小文字にそろえて加える
+                primaryKeyColumns.add(column.getName().toLowerCase());
+            }
+        }
+        // 列の定義を集める
+        List<ColumnDefinition> columns = new ArrayList<>();
+        // テーブルの列を 1 つずつ変換する
+        for (Column column : table.getColumns()) {
+            // 列名を小文字にそろえる
+            String name = column.getName().toLowerCase();
+            // 主キーの列は制約上つねに非 NULL になるため、Hibernate の nullable と併せて判定する
+            boolean notNull = !column.isNullable() || primaryKeyColumns.contains(name);
+            // 方言に応じた SQL 型（varchar(64) など）を取り出して加える
+            columns.add(new ColumnDefinition(name, column.getSqlType(metadata).toLowerCase(), notNull));
+        }
+        // インデックスの定義を集める
+        List<IndexDefinition> indexes = new ArrayList<>();
+        // 一意でないインデックスを加える
+        for (Index index : table.getIndexes().values()) {
+            // 名前と対象列を取り出して加える（一意ではない）
+            indexes.add(new IndexDefinition(
+                    index.getName().toLowerCase(), columnNames(index.getColumns()), false));
+        }
+        // 一意インデックス（@Index(unique = true)）は別の入れ物に入るので、そちらも加える
+        for (UniqueKey uniqueKey : table.getUniqueKeys().values()) {
+            // 名前と対象列を取り出して加える（一意）
+            indexes.add(new IndexDefinition(
+                    uniqueKey.getName().toLowerCase(), columnNames(uniqueKey.getColumns()), true));
+        }
+        // 変換したスキーマを返す（識別列はマッピング情報から取れないので注釈から別途求める）
+        return new Schema(table.getName().toLowerCase(), columns, primaryKeyColumns, indexes,
+                identityColumnsFromAnnotations(primaryKeyColumns));
+    }
+
+    /** 列の一覧から名前だけを小文字で取り出す。 */
+    private static List<String> columnNames(List<Column> columns) {
+        // 名前を集める入れ物
+        List<String> names = new ArrayList<>();
+        // 列を 1 つずつ処理する
+        for (Column column : columns) {
+            // 名前を小文字にそろえて加える
+            names.add(column.getName().toLowerCase());
+        }
+        // 集めた名前を返す
+        return names;
+    }
+
+    /**
+     * 識別列（DB 側で自動採番する列）として定義されているべき列名を求める。
+     *
+     * <p>採番方式はマッピング情報の列からは読み取れないため、ここだけは注釈を直接見る。
+     * 対象は {@code @Id} かつ {@code @GeneratedValue(strategy = IDENTITY)} の列で、列名は
+     * 自前で組み立てず Hibernate が決めた主キーの列名をそのまま使う（命名規則を写さないため）。
+     */
+    private static Set<String> identityColumnsFromAnnotations(List<String> primaryKeyColumns) {
+        // 識別列の名前を集める入れ物
+        Set<String> identityColumns = new LinkedHashSet<>();
+        // エンティティのフィールドを 1 つずつ確認する
+        for (Field field : AuditLog.class.getDeclaredFields()) {
+            // 主キーでなければ対象外
+            if (!field.isAnnotationPresent(Id.class)) {
+                // 次のフィールドへ進む
+                continue;
+            }
+            // 採番方式の指定を取り出す
+            GeneratedValue generatedValue = field.getAnnotation(GeneratedValue.class);
+            // DB 側の自動採番（IDENTITY）でなければ識別列にはならない
+            if (generatedValue == null || generatedValue.strategy() != GenerationType.IDENTITY) {
+                // 次のフィールドへ進む
+                continue;
+            }
+            // 単一列の主キーであることを前提に、Hibernate が決めた主キーの列名を識別列とする
+            identityColumns.addAll(primaryKeyColumns);
+        }
+        // 集めた識別列を返す
+        return identityColumns;
     }
 
     // ------------------------------------------------------------------
     // README 側の読み取り
     // ------------------------------------------------------------------
 
+    /** README の手書き DDL を読み取り、正本と同じ形のスキーマにして返す。 */
+    private static Schema parseReadmeSchema(String expectedTableName) {
+        // DDL ブロックを切り出す（小文字にそろえてあるので以降は大小文字を気にしない）
+        String ddl = readDdlBlock(expectedTableName);
+        // 列定義を囲む丸括弧の開き位置を求める
+        int open = ddl.indexOf('(');
+        // 対応する閉じ括弧を求める
+        int close = matchingParenthesis(ddl, open);
+        // 列の定義を集める入れ物
+        List<ColumnDefinition> columns = new ArrayList<>();
+        // 主キーを構成する列名を集める入れ物
+        List<String> primaryKeyColumns = new ArrayList<>();
+        // 識別列の名前を集める入れ物
+        Set<String> identityColumns = new LinkedHashSet<>();
+        // 括弧の内側をカンマで区切り、1 項目ずつ処理する
+        for (String rawItem : splitTopLevel(ddl.substring(open + 1, close))) {
+            // 型の括弧の中にある空白を落として、語の分割で型が割れないようにする
+            String item = removeWhitespaceInsideParentheses(rawItem.trim());
+            // 空の項目（末尾のカンマなど）は読み飛ばす
+            if (item.isEmpty()) {
+                // 次の項目へ進む
+                continue;
+            }
+            // 空白の連続で語に分ける
+            String[] tokens = item.split("\\s+");
+            // 先頭の語が制約の語なら、これは列ではなく表制約（PRIMARY KEY (id) など）
+            if (CONSTRAINT_KEYWORDS.contains(tokens[0])) {
+                // 表制約のうち主キーだけは対象列を拾う（他の制約は現状この DDL に現れない）
+                if (item.startsWith(PRIMARY_KEY_KEYWORD)) {
+                    // 制約が囲む列名を主キーとして加える
+                    primaryKeyColumns.addAll(parseColumnList(item));
+                }
+                // 列ではないので次の項目へ進む
+                continue;
+            }
+            // 列名と型の 2 語は最低限必要なので、足りなければ解析できていない
+            assertThat(tokens.length)
+                    // 失敗時にどの定義でつまずいたかを示す
+                    .as("列定義を解析できません（列名と型が読み取れません）: %s", item)
+                    // 2 語以上あることを検証する
+                    .isGreaterThanOrEqualTo(2);
+            // 1 語目が列名
+            String name = tokens[0];
+            // 3 語目以降が修飾子（NOT NULL / PRIMARY KEY / 識別列の指定）
+            String modifiers = item.substring(name.length() + tokens[1].length() + 1).trim();
+            // 列に直接書かれた主キー指定は、表制約と同じく主キーの構成列になる
+            if (modifiers.contains(PRIMARY_KEY_KEYWORD)) {
+                // 主キーの列として加える
+                primaryKeyColumns.add(name);
+            }
+            // 識別列の指定があれば覚えておく
+            if (modifiers.contains(IDENTITY_KEYWORD)) {
+                // 識別列として加える
+                identityColumns.add(name);
+            }
+            // 解析した 1 列分を加える（2 語目が型）。
+            // NULL 可否はここでは「NOT NULL と書かれているか」だけを持たせ、主キーによる
+            // 非 NULL は下の 2 周目で反映する
+            columns.add(new ColumnDefinition(name, tokens[1], modifiers.contains(NOT_NULL_KEYWORD)));
+        }
+        // インデックス定義を解析する
+        List<IndexDefinition> indexes = parseIndexes(ddl.substring(close), expectedTableName);
+        // 読み取ったスキーマを返す（主キーの反映を終えた列を渡す）
+        return new Schema(expectedTableName, applyPrimaryKeyNotNull(columns, primaryKeyColumns),
+                primaryKeyColumns, indexes, identityColumns);
+    }
+
     /**
-     * README から DDL のコードブロック（CREATE TABLE ＋ CREATE INDEX）だけを切り出して返す。
+     * 主キーを構成する列を非 NULL として確定させる。
      *
-     * <p><b>探し方</b>: README 中の {@code CREATE TABLE} をすべて見て、テーブル名が正本
-     * （{@code AuditLog} の {@code @Table}）と<b>完全一致</b>する文を採用する。README に別のテーブルの
-     * DDL が増えても取り違えず、逆に README 側でテーブル名を変えた（＝正本とずれた）場合は
-     * 「見つからない」として落ちる。前方一致で探すと {@code audit_logs_v2} のような別名を掴んで
-     * しまい、テーブル名のずれを検出できなくなる。
+     * <p><b>なぜ列の解析と分けるのか</b>: 主キーは列に直接書く形（{@code id BIGINT PRIMARY KEY}）
+     * だけでなく、すべての列の後ろに表制約として書く形（{@code PRIMARY KEY (id)}）も正しい DDL。
+     * 後者では {@code id} を読んだ時点ではまだ主キーだと分からないため、1 周目で判定すると
+     * <b>正しい DDL なのに「NOT NULL がずれている」と誤って落ちる</b>。全項目を読み終えてから
+     * まとめて反映する。
      */
-    private static String readDdlBlock() {
+    private static List<ColumnDefinition> applyPrimaryKeyNotNull(
+            List<ColumnDefinition> columns, List<String> primaryKeyColumns) {
+        // 反映後の列を集める入れ物
+        List<ColumnDefinition> resolved = new ArrayList<>();
+        // 読み取った列を 1 つずつ確認する
+        for (ColumnDefinition column : columns) {
+            // NOT NULL と書かれているか、主キーの構成列なら非 NULL とする
+            boolean notNull = column.notNull() || primaryKeyColumns.contains(column.name());
+            // NULL 可否を確定させた列を加える
+            resolved.add(new ColumnDefinition(column.name(), column.sqlType(), notNull));
+        }
+        // 反映後の列を返す
+        return resolved;
+    }
+
+    /**
+     * README から DDL のコードブロックを切り出し、小文字にそろえて返す。
+     *
+     * <p><b>探し方</b>: README 中の {@code create table} をすべて見て、テーブル名が正本と
+     * <b>完全一致</b>する文を採用する。README に別のテーブルの DDL が増えても取り違えず、逆に
+     * README 側でテーブル名を変えた（＝正本とずれた）場合は「見つからない」として落ちる。
+     * 前方一致で探すと {@code audit_logs_v2} のような別名を掴んでしまい、テーブル名のずれを
+     * 検出できなくなる。再実行可能にするための {@code if not exists} が付いていても読める。
+     */
+    private static String readDdlBlock(String expectedTableName) {
         // README を読む（存在しない・読めないのは環境の異常なので握り潰さず失敗させる。§6）
         String readme;
         try {
-            // UTF-8 として README 全体を読み込む
-            readme = Files.readString(README_PATH, StandardCharsets.UTF_8);
+            // UTF-8 として README 全体を読み込み、以降の解析のため小文字にそろえる。
+            // SQL のキーワードも引用符なしの識別子も大小文字を区別しないため、これで意味は変わらない
+            readme = Files.readString(README_PATH, StandardCharsets.UTF_8).toLowerCase();
         } catch (java.io.IOException e) {
             // どのファイルが読めなかったかを添えて停止する
             throw new IllegalStateException("README を読み取れません: " + README_PATH.toAbsolutePath(), e);
         }
-        // 正本のテーブル名を取り出す（この名前の CREATE TABLE だけを採用する）
-        String expectedTable = tableAnnotation().name();
-        // 最初の CREATE TABLE を探す
-        int cursor = readme.indexOf(CREATE_TABLE_MARKER);
+        // 最初のテーブル定義を探す
+        int cursor = readme.indexOf(CREATE_TABLE_KEYWORD);
         // 見つからなくなるまで 1 文ずつ確認する
         while (cursor >= 0) {
             // 列定義を囲む丸括弧の開き位置を探す（テーブル名はこの手前にある）
@@ -178,10 +450,15 @@ class AuditLogReadmeDdlTest {
                 // 探索を終える
                 break;
             }
-            // 「CREATE TABLE」と開き括弧の間にある語をテーブル名として取り出す
-            String tableName = readme.substring(cursor + CREATE_TABLE_MARKER.length(), paren).trim();
+            // 「create table」と開き括弧の間にある語を取り出す
+            String tableName = readme.substring(cursor + CREATE_TABLE_KEYWORD.length(), paren).trim();
+            // 再実行可能にするための指定が付いていれば取り除く
+            if (tableName.startsWith(IF_NOT_EXISTS_KEYWORD)) {
+                // 指定を落として残りをテーブル名とする
+                tableName = tableName.substring(IF_NOT_EXISTS_KEYWORD.length()).trim();
+            }
             // 正本と完全に一致したらこの文が目的の DDL
-            if (tableName.equals(expectedTable)) {
+            if (tableName.equals(expectedTableName)) {
                 // DDL ブロックの終わり（次のコードフェンス）を探す
                 int end = readme.indexOf(CODE_FENCE, cursor);
                 // 閉じフェンスが無ければ Markdown が壊れているので失敗させる
@@ -193,111 +470,32 @@ class AuditLogReadmeDdlTest {
                 // 開始位置から閉じフェンスの手前までを DDL 本体として返す
                 return readme.substring(cursor, end);
             }
-            // 一致しなければ次の CREATE TABLE を探す
-            cursor = readme.indexOf(CREATE_TABLE_MARKER, cursor + CREATE_TABLE_MARKER.length());
+            // 一致しなければ次のテーブル定義を探す
+            cursor = readme.indexOf(CREATE_TABLE_KEYWORD, cursor + CREATE_TABLE_KEYWORD.length());
         }
         // 正本のテーブル名を持つ DDL が無い＝本番への適用手順が失われている（またはテーブル名がずれた）
         throw new IllegalStateException(
                 // 何が無くて、どう直せばよいかを示す
-                "README に「" + CREATE_TABLE_MARKER + " " + expectedTable + "」が見つかりません"
+                "README に「" + CREATE_TABLE_KEYWORD + " " + expectedTableName + "」が見つかりません"
                         + "（本番へ手動適用する DDL が失われていないか、テーブル名が @Table とずれていないか確認してください）");
     }
 
-    /** README を 1 度だけ読み解き、以降のテストが使う解析結果を用意する。 */
-    @BeforeAll
-    static void parseReadmeDdl() {
-        // README から DDL ブロックを切り出す
-        String ddl = readDdlBlock();
-        // 列定義を解析して保持する
-        ddlColumns = parseColumns(ddl);
-        // インデックス定義を解析して保持する
-        ddlIndexes = parseIndexes(ddl);
-    }
-
-    /** DDL の {@code CREATE TABLE} 部分を解析し、列名から定義を引ける形にして返す。 */
-    private static Map<String, DdlColumn> parseColumns(String ddl) {
-        // CREATE TABLE の列定義を囲む丸括弧の開き位置を探す
-        int open = ddl.indexOf('(');
-        // 開き括弧が無ければ DDL の形が想定と違うので失敗させる
-        assertThat(open)
-                // 失敗時に何が起きたかを示す
-                .as("CREATE TABLE の列定義を囲む丸括弧が見つかりません")
-                // 見つかった位置は 0 以上になる
-                .isNotNegative();
-        // 開き括弧に対応する閉じ括弧を探す（入れ子の括弧に耐えるため深さを数える）
-        int close = matchingParenthesis(ddl, open);
-        // 括弧の内側（列定義の並び）を取り出す
-        String body = ddl.substring(open + 1, close);
-        // 解析結果を列名で引けるようにする入れ物（定義順を保つ）
-        Map<String, DdlColumn> columns = new LinkedHashMap<>();
-        // 括弧の深さ 0 のカンマで区切って 1 列ずつ処理する
-        for (String definition : splitTopLevel(body)) {
-            // 前後の空白を落とす
-            String trimmed = definition.trim();
-            // 空の要素（末尾のカンマなど）は列ではないので飛ばす
-            if (trimmed.isEmpty()) {
-                // 次の要素へ進む
-                continue;
-            }
-            // 空白の連続で区切って語に分ける（VARCHAR(64) のように括弧が続く語は 1 語のまま残る）
-            String[] tokens = trimmed.split("\\s+");
-            // 「列名」「型」の 2 語は最低限必要なので、足りなければ解析できていない
-            assertThat(tokens.length)
-                    // 失敗時にどの定義でつまずいたかを示す
-                    .as("列定義を解析できません（列名と型が読み取れません）: %s", trimmed)
-                    // 2 語以上あることを検証する
-                    .isGreaterThanOrEqualTo(2);
-            // 1 語目が列名（大文字小文字の違いを無視するため小文字にそろえる）
-            String name = tokens[0].toLowerCase();
-            // 2 語目が型（同じく小文字にそろえる）
-            String type = tokens[1].toLowerCase();
-            // 3 語目以降の修飾子を 1 つの文字列にまとめる（大文字にそろえて含有判定しやすくする）
-            StringBuilder modifiers = new StringBuilder();
-            // 3 語目から末尾までを連結する
-            for (int i = 2; i < tokens.length; i++) {
-                // 語の区切りが消えないよう空白を挟んでから連結する
-                modifiers.append(' ').append(tokens[i].toUpperCase());
-            }
-            // 連結した修飾子を文字列として確定する
-            String modifierText = modifiers.toString();
-            // 解析した 1 列分を入れ物へ登録する
-            columns.put(name, new DdlColumn(
-                    // 列名
-                    name,
-                    // 型
-                    type,
-                    // NOT NULL が付いているか
-                    modifierText.contains("NOT NULL"),
-                    // PRIMARY KEY が付いているか
-                    modifierText.contains("PRIMARY KEY"),
-                    // 自動採番（識別列）として定義されているか
-                    modifierText.contains("GENERATED BY DEFAULT AS IDENTITY")));
-        }
-        // 解析結果を返す
-        return columns;
-    }
-
     /**
-     * DDL のインデックス定義（{@code CREATE INDEX} / {@code CREATE UNIQUE INDEX}）をすべて解析して返す。
+     * インデックス定義（{@code create index} / {@code create unique index}）をすべて解析して返す。
      *
      * <p>一意インデックスも読めるようにしてあるのは、{@code @Index(unique = true)} を足したときに
-     * 正しい README の書き方（{@code CREATE UNIQUE INDEX}）がこの検証を通せないと、<b>まっとうな
-     * スキーマ変更のたびにテスト側を直さないと進めなくなる</b>ため。逆向き（README にだけ
-     * 一意インデックスが残る）も見逃さない。
+     * 正しい README の書き方がこの検証を通せないと、<b>まっとうなスキーマ変更のたびにテスト側を
+     * 直さないと進めなくなる</b>ため。逆向き（README にだけ一意インデックスが残る）も見逃さない。
      */
-    private static List<DdlIndex> parseIndexes(String ddl) {
+    private static List<IndexDefinition> parseIndexes(String ddl, String expectedTableName) {
         // 解析結果を集める入れ物
-        List<DdlIndex> indexes = new ArrayList<>();
-        // 対象のテーブル名（インデックスが別のテーブルに向いていないかの確認に使う）
-        String expectedTable = tableAnnotation().name();
-        // CREATE TABLE の列定義を読み飛ばすため、その閉じ括弧の位置を求める
-        int tableClose = matchingParenthesis(ddl, ddl.indexOf('('));
-        // 閉じ括弧より後ろ（インデックス定義が並ぶ範囲）を「;」で文に分けて 1 つずつ処理する
-        for (String rawStatement : ddl.substring(tableClose).split(";")) {
+        List<IndexDefinition> indexes = new ArrayList<>();
+        // 「;」で文に分けて 1 つずつ処理する
+        for (String rawStatement : ddl.split(";")) {
             // 前後の空白を落とす
             String statement = rawStatement.trim();
-            // インデックス定義でない断片（閉じ括弧だけの行など）は飛ばす
-            if (!statement.toUpperCase().startsWith(CREATE_MARKER)) {
+            // インデックス定義でない断片（閉じ括弧だけの行など）は読み飛ばす
+            if (!statement.startsWith(CREATE_KEYWORD)) {
                 // 次の文へ進む
                 continue;
             }
@@ -309,53 +507,77 @@ class AuditLogReadmeDdlTest {
                     .as("インデックス定義の対象列を囲む丸括弧が見つかりません: %s", statement)
                     // 見つかった位置は 0 以上になる
                     .isNotNegative();
-            // 開き括弧に対応する閉じ括弧を探す
-            int close = matchingParenthesis(statement, open);
-            // 「CREATE [UNIQUE] INDEX <名前> ON <テーブル>」の部分を語に分ける
-            String[] head = statement.substring(0, open).trim().split("\\s+");
-            // 2 語目が UNIQUE なら一意インデックス（以降の語の位置が 1 つずれる）
-            boolean unique = head.length > 1 && head[1].equalsIgnoreCase(UNIQUE_MARKER);
-            // UNIQUE の有無による語の位置ずれ
+            // 「create [unique] index <名前> [if not exists] on <テーブル>」の部分を語に分ける
+            String head = statement.substring(0, open).trim();
+            // 再実行可能にするための指定は解析の邪魔になるので取り除く
+            String normalizedHead = head.replace(IF_NOT_EXISTS_KEYWORD, " ").trim();
+            // 語に分ける
+            String[] tokens = normalizedHead.split("\\s+");
+            // 2 語目が unique なら一意インデックス（以降の語の位置が 1 つずれる）
+            boolean unique = tokens.length > 1 && tokens[1].equals(UNIQUE_KEYWORD);
+            // unique の有無による語の位置ずれ
             int offset = unique ? 1 : 0;
-            // CREATE / [UNIQUE] / INDEX / 名前 / ON / テーブル名 の語数を検証する
-            assertThat(head.length)
+            // create / [unique] / index / 名前 / on / テーブル名 の語数を検証する
+            assertThat(tokens.length)
                     // 失敗時にどの文でつまずいたかを示す
                     .as("インデックス定義を解析できません: %s", statement)
-                    // UNIQUE の有無に応じた語数であることを検証する
+                    // unique の有無に応じた語数であることを検証する
                     .isEqualTo(5 + offset);
-            // 3 語目（UNIQUE があれば 4 語目）が INDEX であることを検証する
-            assertThat(head[1 + offset])
+            // index という語が想定の位置にあることを検証する
+            assertThat(tokens[1 + offset])
                     // 失敗時にどの文でつまずいたかを示す
                     .as("インデックス定義として解釈できない文です: %s", statement)
-                    // INDEX という語であることを検証する
-                    .isEqualToIgnoringCase(INDEX_MARKER);
+                    // index であることを検証する
+                    .isEqualTo(INDEX_KEYWORD);
+            // on という語が想定の位置にあることを検証する
+            assertThat(tokens[3 + offset])
+                    // 失敗時にどの文でつまずいたかを示す
+                    .as("インデックス定義として解釈できない文です: %s", statement)
+                    // on であることを検証する
+                    .isEqualTo(ON_KEYWORD);
             // インデックスが正本のテーブルに向いていることを検証する
-            assertThat(head[4 + offset])
+            assertThat(tokens[4 + offset])
                     // 失敗時にどのテーブルへ向いていたかを示す
-                    .as("インデックス %s が別のテーブルに向いています: %s", head[2 + offset], statement)
+                    .as("インデックス %s が別のテーブルに向いています: %s", tokens[2 + offset], statement)
                     // 対象テーブル名が一致することを検証する
-                    .isEqualTo(expectedTable);
-            // 対象列の一覧を組み立てる入れ物
-            List<String> indexColumns = new ArrayList<>();
-            // 括弧の内側をカンマで区切って 1 列ずつ加える
-            for (String column : splitTopLevel(statement.substring(open + 1, close))) {
-                // 前後の空白を落とし小文字にそろえて加える
-                indexColumns.add(column.trim().toLowerCase());
-            }
-            // 解析した 1 つ分を入れ物へ加える
-            indexes.add(new DdlIndex(head[2 + offset].toLowerCase(), indexColumns, unique));
+                    .isEqualTo(expectedTableName);
+            // 解析した 1 つ分を加える
+            indexes.add(new IndexDefinition(tokens[2 + offset], parseColumnList(statement), unique));
         }
         // 解析結果を返す
         return indexes;
     }
 
+    /** 丸括弧に囲まれた列名の並び（{@code (a, b)}）を取り出して返す。 */
+    private static List<String> parseColumnList(String text) {
+        // 開き括弧の位置を探す
+        int open = text.indexOf('(');
+        // 対応する閉じ括弧の位置を探す
+        int close = matchingParenthesis(text, open);
+        // 列名を集める入れ物
+        List<String> columns = new ArrayList<>();
+        // 括弧の内側をカンマで区切って 1 つずつ加える
+        for (String column : splitTopLevel(text.substring(open + 1, close))) {
+            // 前後の空白を落として加える
+            columns.add(column.trim());
+        }
+        // 集めた列名を返す
+        return columns;
+    }
+
     /**
      * {@code open} の位置にある開き括弧に対応する閉じ括弧の位置を返す。
      *
-     * <p>単純に最初の {@code ')'} を探すと、{@code NUMERIC(10, 2)} のように型が括弧を持つ列が
+     * <p>単純に最初の {@code ')'} を探すと、{@code numeric(10,2)} のように型が括弧を持つ列が
      * 増えたときに途中で切れる。深さを数えて対応する側を見つける。
      */
     private static int matchingParenthesis(String text, int open) {
+        // 開き括弧が見つかっていない場合は解析できないので失敗させる
+        assertThat(open)
+                // 失敗時に何が起きたかを示す
+                .as("丸括弧が見つかりません: %s", text)
+                // 見つかった位置は 0 以上になる
+                .isNotNegative();
         // 括弧の深さ（開き括弧で増やし閉じ括弧で減らす）
         int depth = 0;
         // 開き括弧の位置から末尾まで 1 文字ずつ走査する
@@ -383,7 +605,7 @@ class AuditLogReadmeDdlTest {
     /**
      * 括弧の深さ 0 にあるカンマだけで文字列を区切って返す。
      *
-     * <p>{@code String.split(",")} だと型の中のカンマ（{@code NUMERIC(10, 2)}）でも切れてしまうため、
+     * <p>{@code String.split(",")} だと型の中のカンマ（{@code numeric(10,2)}）でも切れてしまうため、
      * 深さを見ながら自前で区切る。
      */
     private static List<String> splitTopLevel(String text) {
@@ -417,257 +639,130 @@ class AuditLogReadmeDdlTest {
         return parts;
     }
 
-    // ------------------------------------------------------------------
-    // エンティティ側（正本）の読み取り
-    // ------------------------------------------------------------------
-
-    /** {@link AuditLog} の注釈から、DDL に現れるべき列の期待値を組み立てて返す。 */
-    private static List<ExpectedColumn> expectedColumns() {
-        // 期待値を集める入れ物
-        List<ExpectedColumn> expected = new ArrayList<>();
-        // エンティティが宣言しているフィールドを 1 つずつ確認する
-        for (Field field : AuditLog.class.getDeclaredFields()) {
-            // 定数（static）やコンパイラが足したフィールドは列ではないので飛ばす
-            if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) {
-                // 次のフィールドへ進む
+    /**
+     * 丸括弧の内側にある空白だけを取り除く。
+     *
+     * <p>{@code numeric(10, 2)} のように型の引数が空白で区切られていると、語の分割で型が
+     * 2 つに割れて読めなくなる。Hibernate 側は空白なしで返すため、比較できる形にそろえる。
+     */
+    private static String removeWhitespaceInsideParentheses(String text) {
+        // 組み立て先のバッファ
+        StringBuilder normalized = new StringBuilder(text.length());
+        // 括弧の深さ
+        int depth = 0;
+        // 先頭から末尾まで 1 文字ずつ走査する
+        for (int i = 0; i < text.length(); i++) {
+            // 現在位置の文字を取り出す
+            char c = text.charAt(i);
+            // 開き括弧なら深さを増やす
+            if (c == '(') {
+                // 深さを増やす
+                depth++;
+            } else if (c == ')') {
+                // 閉じ括弧なら深さを減らす
+                depth--;
+            }
+            // 括弧の内側の空白だけを落とし、それ以外はそのまま残す
+            if (depth > 0 && Character.isWhitespace(c)) {
+                // この文字は加えずに次へ進む
                 continue;
             }
-            // 列の設定（名前・長さ・NULL 可否）を取り出す（付いていなければ null）
-            Column column = field.getAnnotation(Column.class);
-            // 主キーの列かどうかを判定する
-            boolean isId = field.isAnnotationPresent(Id.class);
-            // 列名を決める（@Column で明示されていればそれ、無ければフィールド名を snake_case にした名前）
-            String name = (column != null && !column.name().isEmpty())
-                    // 明示された列名を使う
-                    ? column.name()
-                    // 明示が無いときは Spring Boot 既定の命名規則（キャメルケース→スネークケース）に合わせる
-                    : camelCaseToSnakeCase(field.getName());
-            // NOT NULL であるべきかを決める（主キーは PRIMARY KEY が NOT NULL を含むので必ず非 NULL）
-            boolean notNull = isId || (column != null && !column.nullable());
-            // 期待値を 1 件加える
-            expected.add(new ExpectedColumn(name, expectedSqlType(field, column), notNull, isId));
+            // 文字を加える
+            normalized.append(c);
         }
-        // 組み立てた期待値を返す
-        return expected;
-    }
-
-    /**
-     * フィールドの Java 型から、DDL に書かれているべき SQL の型を決める。
-     *
-     * <p>対応表に無い型が現れたら黙って素通りさせず失敗させる。素通りさせると、新しい型の列を
-     * 足した人に対して<b>この検出網が何も言わなくなる</b>（＝ README への追記漏れを見逃す）。
-     */
-    private static String expectedSqlType(Field field, Column column) {
-        // 文字列系の列長を決める（@Column が無ければ JPA 既定の 255）
-        int length = (column != null) ? column.length() : DEFAULT_COLUMN_LENGTH;
-        // フィールドの型を取り出す
-        Class<?> type = field.getType();
-        // 文字列はそのまま可変長文字列になる
-        if (type == String.class) {
-            // 長さ付きの varchar を返す
-            return "varchar(" + length + ")";
-        }
-        // 列挙は EnumType.STRING のときだけ可変長文字列になる（序数保存は数値列になり型が変わる）
-        if (type.isEnum()) {
-            // 保存形式の指定を取り出す
-            Enumerated enumerated = field.getAnnotation(Enumerated.class);
-            // 文字列として保存する指定であることを確かめる
-            assertThat(enumerated != null && enumerated.value() == EnumType.STRING)
-                    // 失敗時にどのフィールドかと理由を示す
-                    .as("%s は @Enumerated(EnumType.STRING) ではありません（序数保存は監査ログとして成立しません）",
-                            field.getName())
-                    // 文字列保存であることを検証する
-                    .isTrue();
-            // 長さ付きの varchar を返す
-            return "varchar(" + length + ")";
-        }
-        // 64 ビット整数は bigint になる
-        if (type == Long.class || type == long.class) {
-            // bigint を返す
-            return "bigint";
-        }
-        // 日時は既定の精度（マイクロ秒）付きの timestamp になる
-        if (type == LocalDateTime.class) {
-            // timestamp(6) を返す
-            return "timestamp(6)";
-        }
-        // 対応表に無い型は、期待する SQL 型が分からないまま検証を素通りさせないよう失敗させる
-        throw new IllegalStateException(
-                // どのフィールドで、何をすればよいかを示す
-                "SQL 型の対応が未定義です: field=" + field.getName() + ", type=" + type.getName()
-                        + "（AuditLogReadmeDdlTest#expectedSqlType に対応を追加してください）");
-    }
-
-    /** キャメルケースのフィールド名を、Spring Boot 既定の命名規則と同じスネークケースに変換する。 */
-    private static String camelCaseToSnakeCase(String fieldName) {
-        // 変換後の名前を組み立てるバッファ
-        StringBuilder converted = new StringBuilder();
-        // 先頭から末尾まで 1 文字ずつ走査する
-        for (int i = 0; i < fieldName.length(); i++) {
-            // 現在位置の文字を取り出す
-            char c = fieldName.charAt(i);
-            // 大文字は単語の切れ目なので、先頭以外ならアンダースコアを挟む
-            if (Character.isUpperCase(c) && i > 0) {
-                // 区切りのアンダースコアを加える
-                converted.append('_');
-            }
-            // 文字自体は小文字にして加える
-            converted.append(Character.toLowerCase(c));
-        }
-        // 変換した名前を返す
-        return converted.toString();
-    }
-
-    /** {@link AuditLog} に宣言されている {@code @Table} の設定を返す。 */
-    private static Table tableAnnotation() {
-        // テーブル定義の注釈を取り出す
-        Table table = AuditLog.class.getAnnotation(Table.class);
-        // 付いていなければテーブル名もインデックスも読み取れないので失敗させる
-        assertThat(table)
-                // 失敗時に何が起きたかを示す
-                .as("AuditLog に @Table が付いていません（テーブル名とインデックスの正本が失われています）")
-                // 注釈が存在することを検証する
-                .isNotNull();
-        // 取り出した注釈を返す
-        return table;
+        // そろえた文字列を返す
+        return normalized.toString();
     }
 
     // ------------------------------------------------------------------
     // 検証
     // ------------------------------------------------------------------
 
-    // 解析そのものが機能していること（空振りで素通りしていないこと）を検証する
+    // 両側の読み取りが機能していること（空振りで素通りしていないこと）を検証する
     @Test
-    void READMEのDDLを解析できている() {
-        // 列定義が読み取れていることを検証する。
-        // 【なぜ先に確かめるか】解析に失敗して 0 件になると、以降の「全部そろっている」検証が
-        // 「対象なし」で常に成功し、検出網そのものが死んでいることに気付けなくなる。
-        // なお、正本のテーブル名を持つ CREATE TABLE が README に無い場合は、この時点より前
-        // （readDdlBlock）で明示的に失敗している
-        assertThat(ddlColumns)
+    void 正本とREADMEの両方からスキーマを読み取れている() {
+        // 正本側の列が読み取れていることを検証する。
+        // 【なぜ先に確かめるか】どちらかが空のまま素通りすると、以降の「一致している」検証が
+        // 「対象なし」で常に成功し、検出網そのものが死んでいることに気付けなくなる
+        assertThat(entitySchema.columns())
+                // 失敗時に何が起きたかを示す
+                .as("AuditLog のマッピングから列を読み取れませんでした")
+                // 少なくとも 1 列は読み取れていることを検証する
+                .isNotEmpty();
+        // README 側の列が読み取れていることを検証する
+        assertThat(readmeSchema.columns())
                 // 失敗時に何が起きたかを示す
                 .as("README の DDL から列定義を読み取れませんでした")
                 // 少なくとも 1 列は読み取れていることを検証する
                 .isNotEmpty();
-        // インデックス定義も読み取れていることを検証する
-        assertThat(ddlIndexes)
+        // 正本側のインデックスが読み取れていることを検証する
+        assertThat(entitySchema.indexes())
                 // 失敗時に何が起きたかを示す
-                .as("README の DDL からインデックス定義を読み取れませんでした")
+                .as("AuditLog のマッピングからインデックスを読み取れませんでした")
                 // 少なくとも 1 つは読み取れていることを検証する
                 .isNotEmpty();
     }
 
-    // エンティティの全列が README の DDL に同じ型・同じ NULL 可否で載っていることを検証する
+    // 列が名前・型・NULL 可否まで含めて過不足なく一致することを検証する
     @Test
-    void READMEのDDLがエンティティの全列を同じ定義で持つ() {
-        // エンティティ側の期待値を 1 列ずつ突き合わせる
-        for (ExpectedColumn expected : expectedColumns()) {
-            // 同名の列を README 側から探す
-            DdlColumn actual = ddlColumns.get(expected.name());
-            // 列そのものが載っていることを検証する
-            assertThat(actual)
-                    // 失敗時にどの列が抜けているかと直し方を示す
-                    .as("README の DDL に列 %s がありません（AuditLog に追加した列を README にも反映してください）",
-                            expected.name())
-                    // 列が存在することを検証する
-                    .isNotNull();
-            // 型が一致していることを検証する（列長のずれもここで落ちる）
-            assertThat(actual.type())
-                    // 失敗時にどの列でどうずれているかを示す
-                    .as("README の DDL の列 %s の型がエンティティの定義と一致しません", expected.name())
-                    // 期待する SQL 型と一致することを検証する
-                    .isEqualTo(expected.type());
-            // NULL 可否が一致していることを検証する。
-            // PRIMARY KEY は SQL の定義上 NOT NULL を含むため、主キー列に NOT NULL を重ねて
-            // 書いていなくても非 NULL とみなす（README は重複を避けて PRIMARY KEY だけを書いている）
-            assertThat(actual.notNull() || actual.primaryKey())
-                    // 失敗時にどの列でどうずれているかを示す
-                    .as("README の DDL の列 %s の NOT NULL がエンティティの nullable と一致しません",
-                            expected.name())
-                    // 期待する NULL 可否と一致することを検証する
-                    .isEqualTo(expected.notNull());
-        }
+    void READMEのDDLの列が正本と一致する() {
+        // 【なぜ過不足の両方を見るか】足りない列は validate で起動失敗になり、余分な列は
+        // validate を素通りして使われない列が本番だけに残り続ける
+        assertThat(readmeSchema.columns())
+                // 失敗時に何が起きているかと直し方を示す
+                .as("README の DDL の列が AuditLog のマッピングと一致しません"
+                        + "（列を変えたら README「監査ログの確認」の DDL も同じ PR で直してください）")
+                // 順序を問わず過不足なく一致することを検証する
+                .containsExactlyInAnyOrderElementsOf(entitySchema.columns());
     }
 
-    // README の DDL にエンティティが持たない列が紛れていないことを検証する
+    // README の DDL に同じ列が二重に書かれていないことを検証する
     @Test
-    void READMEのDDLに余分な列が無い() {
-        // エンティティ側の列名を組み立てる
-        List<String> expectedNames = expectedColumns().stream().map(ExpectedColumn::name).toList();
-        // 【なぜ余分も見るか】列を削ったのに README に残っていると、validate では検出されず
-        // （余分な列があってもエンティティ側の検証は通る）、使われない列が本番だけに残り続ける
-        assertThat(ddlColumns.keySet())
+    void READMEのDDLに重複した列が無い() {
+        // 読み取った列名を取り出す
+        List<String> names = readmeSchema.columns().stream().map(ColumnDefinition::name).toList();
+        // 【なぜ確かめるか】同じ列を 2 度書いても、名前で引く比較では 1 つに畳まれて気付けない。
+        // PostgreSQL は適用時に「column ... specified more than once」で拒否するため、
+        // 検出網が通したのに本番で適用できない DDL になる
+        assertThat(names)
                 // 失敗時に何が起きているかを示す
-                .as("README の DDL にエンティティが持たない列が含まれています")
-                // 過不足なく一致することを検証する
-                .containsExactlyInAnyOrderElementsOf(expectedNames);
+                .as("README の DDL に同じ列が複数回定義されています")
+                // 重複が無いことを検証する
+                .doesNotHaveDuplicates();
     }
 
-    // 主キーが自動採番の識別列として定義されていることを検証する
+    // 主キーが一致し、自動採番の識別列として定義されていることを検証する
     @Test
-    void READMEのDDLの主キーが自動採番の識別列になっている() {
-        // エンティティ側で主キーとされている列を探す
-        ExpectedColumn idColumn = expectedColumns().stream()
-                // 主キーの列だけに絞る
-                .filter(ExpectedColumn::id)
-                // 最初の 1 件を取り出す
-                .findFirst()
-                // 主キーが無いエンティティはこのテーブルでは想定していないので失敗させる
-                .orElseThrow(() -> new IllegalStateException("AuditLog に @Id の列がありません"));
-        // README 側の同名の列を取り出す
-        DdlColumn actual = ddlColumns.get(idColumn.name());
-        // 列そのものが載っていることを先に検証する。
-        // 【なぜ先に見るか】無いまま次の行で参照すると、直し方の書かれていない NullPointerException が
-        // 出るだけになり、読み手はスタックトレースから原因を推測することになる
-        assertThat(actual)
-                // 失敗時にどの列が抜けているかと直し方を示す
-                .as("README の DDL に主キーの列 %s がありません（AuditLog の @Id を README にも反映してください）",
-                        idColumn.name())
-                // 列が存在することを検証する
-                .isNotNull();
-        // 主キー指定が付いていることを検証する
-        assertThat(actual.primaryKey())
-                // 失敗時に何が足りないかを示す
-                .as("README の DDL の列 %s に PRIMARY KEY がありません", idColumn.name())
-                // PRIMARY KEY が付いていることを検証する
-                .isTrue();
-        // 自動採番（識別列）として定義されていることを検証する。
+    void READMEのDDLの主キーが正本と一致し識別列になっている() {
+        // 主キーを構成する列が一致することを検証する
+        assertThat(readmeSchema.primaryKeyColumns())
+                // 失敗時に何が起きているかを示す
+                .as("README の DDL の主キーが AuditLog のマッピングと一致しません")
+                // 順序を問わず過不足なく一致することを検証する
+                .containsExactlyInAnyOrderElementsOf(entitySchema.primaryKeyColumns());
+        // 識別列（自動採番）の指定が一致することを検証する。
         // 【なぜ確かめるか】@GeneratedValue(IDENTITY) は DB 側の採番が前提で、識別列でないと
         // 挿入時に主キーが埋まらず、監査ログの書き込みだけが本番で落ちる（しかも fail-open なので
         // WARN が出るだけで API は正常に見える）
-        assertThat(actual.identity())
+        assertThat(readmeSchema.identityColumns())
                 // 失敗時に何が足りないかを示す
-                .as("README の DDL の列 %s が GENERATED BY DEFAULT AS IDENTITY になっていません",
-                        idColumn.name())
-                // 識別列として定義されていることを検証する
-                .isTrue();
+                .as("README の DDL の識別列（%s）が AuditLog の @GeneratedValue と一致しません",
+                        IDENTITY_KEYWORD)
+                // 過不足なく一致することを検証する
+                .containsExactlyInAnyOrderElementsOf(entitySchema.identityColumns());
     }
 
-    // エンティティが宣言するインデックスが README の DDL と過不足なく一致することを検証する
+    // インデックスが名前・対象列・一意指定まで含めて過不足なく一致することを検証する
     @Test
-    void READMEのDDLがエンティティの全インデックスを過不足なく持つ() {
-        // エンティティ側の期待値を組み立てる入れ物
-        List<DdlIndex> expected = new ArrayList<>();
-        // @Table のインデックス宣言を 1 つずつ期待値へ変換する
-        for (jakarta.persistence.Index index : tableAnnotation().indexes()) {
-            // 対象列（"a, b" の形）を組み立てる入れ物
-            List<String> indexColumns = new ArrayList<>();
-            // カンマ区切りの列名を 1 つずつ加える
-            for (String column : index.columnList().split(",")) {
-                // 前後の空白を落とし小文字にそろえて加える
-                indexColumns.add(column.trim().toLowerCase());
-            }
-            // 期待値を 1 件加える（一意指定の有無も比較対象に含める）
-            expected.add(new DdlIndex(index.name().toLowerCase(), indexColumns, index.unique()));
-        }
+    void READMEのDDLのインデックスが正本と一致する() {
         // 【なぜ過不足の両方を見るか】ddl-auto: validate はインデックスを検証しないため、
         // ここでずれても本番は起動してしまう。追記漏れは全件走査に、消し忘れは不要な
         // 書き込みコストになり、どちらも実行時には何の合図も出ない
-        assertThat(ddlIndexes)
+        assertThat(readmeSchema.indexes())
                 // 失敗時に何が起きているかと直し方を示す
-                .as("README の DDL のインデックスが @Table の宣言と一致しません"
+                .as("README の DDL のインデックスが AuditLog のマッピングと一致しません"
                         + "（インデックスは validate で検証されないため、ずれても本番は起動します）")
                 // 順序を問わず過不足なく一致することを検証する
-                .containsExactlyInAnyOrderElementsOf(expected);
+                .containsExactlyInAnyOrderElementsOf(entitySchema.indexes());
     }
 }
