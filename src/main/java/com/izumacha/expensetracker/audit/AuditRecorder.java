@@ -13,6 +13,8 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 // 記録候補の一覧を扱うインターフェース
 import java.util.List;
+// 警告ログ用の文字列を組み立てるために使う
+import java.util.stream.Collectors;
 // ログ出力に使うロガー本体
 import org.slf4j.Logger;
 // ロガーを生成するファクトリ
@@ -266,6 +268,6 @@ public class AuditRecorder {
                 // 1 件ごとに「種類:操作」の形へ変換する
                 .map(auditLog -> auditLog.getEntityName() + ":" + auditLog.getAction())
                 // カンマ区切りで 1 つの文字列にまとめる
-                .collect(java.util.stream.Collectors.joining(", "));
+                .collect(Collectors.joining(", "));
     }
 }

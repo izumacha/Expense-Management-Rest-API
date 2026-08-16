@@ -33,10 +33,14 @@ public interface AuditLogRepository extends Repository<AuditLog, Long> {
     /**
      * 監査ログをまとめて保存する（追記のみ）。
      *
+     * <p>型引数の形は Spring Data の基底実装（{@code SimpleJpaRepository}）の宣言に合わせてある。
+     * 名前と引数が一致することで、独自クエリを書かずに基底実装がそのまま使われる。
+     *
      * @param auditLogs 保存する監査ログの一覧
+     * @param <S>       保存する監査ログの型（{@link AuditLog} かその派生型）
      * @return 保存された監査ログ（採番済みの主キーを持つ）
      */
-    List<AuditLog> saveAll(Iterable<AuditLog> auditLogs);
+    <S extends AuditLog> List<S> saveAll(Iterable<S> auditLogs);
 
     /**
      * 保存済みの監査ログをすべて返す。
