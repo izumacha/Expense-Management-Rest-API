@@ -23,6 +23,37 @@ updates:
     commit-message:
       # コミット規約 type(scope) に合わせる (§12)
       prefix: "chore(docker)"
+    ignore:
+      # ベースイメージの major (= 動かす Java の major) 更新を意図的に止めている。
+      #
+      # 【なぜ止めるのか】このリポジトリで「動かす Java の major」は 4 か所で宣言している。
+      #   1. pom.xml の <java.version>                … コンパイル対象のバイトコード版
+      #   2. .github/workflows/ci.yml の java-version … ビルドとテストを実際に流す JDK
+      #   3. Dockerfile のビルドステージ maven:<maven>-eclipse-temurin-<major>
+      #   4. Dockerfile の実行ステージ eclipse-temurin:<major>-jre
+      # Dependabot の docker エコシステムが触るのは 3 と 4 だけで、1 と 2 は動かない。
+      # つまり major を上げる PR は「JDK 21 でビルドしてテストした成果物を、別 major の
+      # JRE で動かす」差分になる。
+      #
+      # 【なぜ CI の緑が判断材料にならないのか】CI は build-test ジョブ 1 本だけで、
+      # Temurin 21 上の ./mvnw -B verify しか実行しない。Dockerfile はビルドすらしないため、
+      # ベースイメージを変えても CI の結果は 1 ビットも動かない。緑は「Java 21 のビルドが
+      # まだ通る」ことの証明であって、「新しい JRE で動く」ことの証明ではない。
+      # 壊れるとしたら本番の起動時 (Spring のプロキシ生成が使うバイトコード操作ライブラリは
+      # 新しい JDK で落ちることがある) で、しかも手元では再現しない。CI が赤くならない
+      # fail-open なので、バージョンの主導権を「ランタイムを上げる判断」の側に置いている。
+      #
+      # 【上げるときの手順】Java を次の LTS へ上げるときは、上記 4 か所を同じ major へ
+      # 揃える PR を 1 本で出す (この ignore は残したままでよい。止めたいのは
+      # 「ランタイムを上げる判断と無関係な、イメージだけの単独 major 更新」だけ)。
+      # Spring Boot 側の対応 Java バージョンも先に確認する。
+      #
+      # 4 か所の食い違いと、この ignore 自体の消失・効きすぎは
+      # JavaRuntimeAlignmentTest が機械的に検出する。
+      - dependency-name: "eclipse-temurin"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "maven"
+        update-types: ["version-update:semver-major"]
 
   # docker-compose.yml のサービスイメージ (postgres:16)。docker エコシステムは
   # Dockerfile しか走査しないため、compose ファイルは専用エコシステムで別途監視する

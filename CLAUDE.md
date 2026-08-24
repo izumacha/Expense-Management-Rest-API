@@ -81,6 +81,16 @@ docker compose up --build        # PostgreSQL + アプリを一括起動（推�
 
 `.github/workflows/ci.yml` の `build-test` ジョブ 1 本が `./mvnw -B verify`（Temurin JDK 21）を実行し、`target/surefire-reports/*.xml` を成果物として保存する。
 
+### 動かす Java の major は 4 か所で揃える
+
+**「動かす Java の major」の宣言は 4 か所ある**（`pom.xml` の `<java.version>` / `.github/workflows/ci.yml` の `java-version` / `Dockerfile` のビルドステージ `maven:<maven>-eclipse-temurin-<major>` / `Dockerfile` の実行ステージ `eclipse-temurin:<major>-jre`）。**Java を次の LTS へ上げるときは 4 か所を同じ major へ揃える PR を 1 本で出す**（Spring Boot 側の対応 Java バージョンも先に確認する）。
+
+Dependabot の docker エコシステムが触るのは Dockerfile の 2 か所だけで、`pom.xml` と CI は動かない。そのためベースイメージだけの major 更新は「JDK 21 でビルドしてテストした成果物を、別 major の JRE で動かす」差分になる。**この食い違いは CI では捕まらない** — CI は `build-test` ジョブ 1 本で Temurin 21 上の `./mvnw -B verify` を流すだけで `Dockerfile` をビルドすらしないため、ベースイメージを変えても結果が 1 ビットも動かない。緑は「Java 21 のビルドがまだ通る」ことの証明であって「新しい JRE で動く」ことの証明ではない（**CI の緑が判断材料にならない fail-open**）。壊れるとしたら本番の起動時で、しかも手元では再現しない。
+
+そこで `.github/dependabot.yml` の `ignore` で `eclipse-temurin` / `maven` の major 更新を止め、バージョンの主導権を「ランタイムを上げる判断」の側に置いている。**この `ignore` を消したり、`Dockerfile` のベースイメージだけを上げたりしない。**
+
+整合性は `JavaRuntimeAlignmentTest`（`src/test/java/.../build/`）が機械的に見張る。見張る対象は 4 つ: (a) 4 か所の major の食い違い、(b) 読み取り不能（宣言の書き方が変わって検出網が黙って死ぬのを防ぐため fail-closed で落とす）、(c) 保留の消失、(d) 効きすぎ（`update-types` の欠落＝全更新の無視・`versions` の追加・エントリの重複。Dependabot は同じ依存の複数エントリを**すべて適用**する）。
+
 ### 見せ方（§15 の具体化）
 
 - スタック形態は「CLI / バッチ」相当（UI を持たない REST API）: 公開 URL・スクショは適用外、**端末操作の録画（asciinema / GIF）で代替**する。
