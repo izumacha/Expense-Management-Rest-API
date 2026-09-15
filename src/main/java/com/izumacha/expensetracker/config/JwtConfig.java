@@ -27,6 +27,10 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 // JwtEncoder の Nimbus 実装
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+// iss の検証規則（未設定も失敗）を Javadoc から参照するためのバリデータ型
+import org.springframework.security.oauth2.jwt.JwtIssuerValidator;
+// 既定の検証に iss の一致検証を足したバリデータを組み立てるファクトリ
+import org.springframework.security.oauth2.jwt.JwtValidators;
 
 /**
  * JWT の署名・検証に使う共有シークレット（HS256）を構成する設定クラス。
@@ -43,6 +47,12 @@ import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 // このクラスが Spring の設定クラスであることを示す
 @Configuration
 public class JwtConfig {
+
+    // このアプリが iss クレームとして名乗る識別子。**発行側と検証側の唯一の参照元**。
+    // 発行側（AuthTokenService）はこの値を載せ、検証側（下の jwtDecoder）はこの値と一致することを
+    // 要求する。どちらか一方に写しを置くと、片方だけ変えたときに「名乗りと検査が食い違い、
+    // 自分で発行したトークンを自分で拒む」か、逆に「検査が名乗りを追わず素通りする」になる（§6）。
+    public static final String TOKEN_ISSUER = "expense-tracker";
 
     // HS256 の共有シークレットに要求する最小バイト数（256 ビット = 32 バイト。RFC 7518 §3.2）
     // 同一パッケージのテストから境界値を参照できるようパッケージプライベートにしている
@@ -80,15 +90,34 @@ public class JwtConfig {
     }
 
     /**
-     * 受信した Bearer トークン（JWT）の署名検証・有効期限検証を行うデコーダを登録する。
+     * 受信した Bearer トークン（JWT）の署名・クレームを検証するデコーダを登録する。
      *
-     * @return HS256 の共有シークレットで検証する JwtDecoder
+     * <p>検証するもの: HS256 の署名、{@code exp} / {@code nbf}（既定の時刻検証。時刻ずれ許容 60 秒）、
+     * 証明書バインド（{@code cnf.x5t#S256}。本アプリはこのクレームを載せないので実質 no-op）、
+     * そして {@code iss} が {@link #TOKEN_ISSUER} と一致すること。
+     *
+     * <p><b>iss を検証する理由</b><br>
+     * 署名鍵は {@code JWT_SECRET} 1 つなので、iss を見ないと「その鍵を知っている全員」が通る。
+     * 同じ値を別サービスと共用してしまう運用ミスが、そのままこの API への完全なアクセスになる。
+     * iss 未設定のトークンも {@link JwtIssuerValidator} の既定どおり失敗させる（不一致だけを弾くと
+     * iss を省くだけで迂回できる）。
+     *
+     * <p><b>組み立てに {@code createDefaultWithIssuer} を使う理由</b><br>
+     * {@code setJwtValidator} は既定のバリデータを**置き換える**ため、自分で
+     * {@code DelegatingOAuth2TokenValidator} を組むと「既定を束ね忘れて期限切れトークンが通る」
+     * 事故を書けてしまう。このファクトリは既定を必ず内側へ入れ直すので、その誤りが表現できない。
+     *
+     * @return HS256 の共有シークレットと iss の一致まで検証する JwtDecoder
      */
     // このメソッドが返す JwtDecoder を Spring の Bean として登録する
     @Bean
     public JwtDecoder jwtDecoder() {
-        // 共有シークレット鍵と HS256 アルゴリズムを指定してデコーダを組み立てて返す
-        return NimbusJwtDecoder.withSecretKey(secretKey).macAlgorithm(MacAlgorithm.HS256).build();
+        // 共有シークレット鍵と HS256 アルゴリズムを指定してデコーダを組み立てる
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(secretKey).macAlgorithm(MacAlgorithm.HS256).build();
+        // 既定の検証（exp / nbf / 証明書バインド）に iss の一致検証を足したものへ差し替える
+        decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(TOKEN_ISSUER));
+        // iss まで検証するデコーダを返す
+        return decoder;
     }
 
     /**

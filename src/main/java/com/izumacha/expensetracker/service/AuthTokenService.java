@@ -5,6 +5,8 @@ package com.izumacha.expensetracker.service;
 import com.izumacha.expensetracker.audit.AuditAction;
 // 監査ログの記録先を参照する
 import com.izumacha.expensetracker.audit.AuditRecorder;
+// iss クレームの識別子（発行側と検証側で共有する唯一の参照元）を参照する
+import com.izumacha.expensetracker.config.JwtConfig;
 // トークン発行リクエスト DTO を参照する
 import com.izumacha.expensetracker.dto.request.TokenRequest;
 // トークン発行レスポンス DTO を参照する
@@ -68,9 +70,6 @@ public class AuthTokenService {
     // 長くするほど漏洩時に悪用できる時間が延びるため、MVP では短めの 1 時間とする（§9）
     public static final long TOKEN_TTL_SECONDS = 3600;
 
-    // JWT の発行者（iss クレーム）として名乗る識別子（本アプリを表す固定値）
-    static final String TOKEN_ISSUER = "expense-tracker";
-
     // ユーザー名・パスワードの照合を行う認証マネージャ（ApiUserConfig で構成）
     private final AuthenticationManager authenticationManager;
 
@@ -111,7 +110,7 @@ public class AuthTokenService {
         // JWT のクレーム（トークンの中身）を組み立てる
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 // 発行者（このアプリ）を設定する
-                .issuer(TOKEN_ISSUER)
+                .issuer(JwtConfig.TOKEN_ISSUER)
                 // 主体（認証に成功したユーザー名）を設定する
                 .subject(authentication.getName())
                 // 発行時刻を設定する

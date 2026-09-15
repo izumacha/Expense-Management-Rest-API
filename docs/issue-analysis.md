@@ -43,7 +43,7 @@
 
 | # | 所見 | 現状 | 根拠 |
 |---|---|---|---|
-| 1.1 | 認証・認可が一切ない | **解消済み** | `config/SecurityConfig.java` が `anyRequest().authenticated()` を強制し、JWT（Resource Server 方式・HS256）を必須化。認証不要は `POST /api/auth/token`（＋ERROR ディスパッチ）のみ。`JwtConfig`（シークレット未設定/32 バイト未満で起動失敗）・`ApiUserConfig`（ユーザー名/bcrypt ハッシュ未設定・平文で起動失敗）・CORS 許可オリジンの明示リスト（未設定は全拒否・`*` は起動失敗）がいずれも fail-closed。`JwtAuthorizationTest` / `CorsPolicyTest` / `SecurityConfigValidationTest` で回帰テスト済み |
+| 1.1 | 認証・認可が一切ない | **解消済み** | `config/SecurityConfig.java` が `anyRequest().authenticated()` を強制し、JWT（Resource Server 方式・HS256）を必須化。認証不要は `POST /api/auth/token`（＋ERROR ディスパッチ）のみ。`JwtConfig`（シークレット未設定/32 バイト未満で起動失敗）・`ApiUserConfig`（ユーザー名/bcrypt ハッシュ未設定・平文で起動失敗）・CORS 許可オリジンの明示リスト（未設定は全拒否・`*` は起動失敗）がいずれも fail-closed。デコーダは `iss` が `JwtConfig.TOKEN_ISSUER` と一致することも要求する（不一致・未設定はどちらも 401。署名鍵を他サービスと共用した場合に素通りするのを防ぐ）。`JwtAuthorizationTest` / `CorsPolicyTest` / `SecurityConfigValidationTest` で回帰テスト済み |
 | 1.2 | レート制限・サイズ上限・タイムアウトがない | **解消済み** | `security/RateLimitFilter.java`（IP 単位・ウィンドウ制限）、`RequestBodySizeLimitFilter`（本文サイズ上限＋413）、`application.yml` の `server.tomcat.connection-timeout`/`max-swallow-size` |
 | 1.3 | 一覧 API に上限・ページネーションがない | **解消済み** | `CategoryController`/`ExpenseController` が `Pageable` + `PageableSanitizer`（sort 固定・page 上限）を使用、`application.yml` の `spring.data.web.pageable.max-page-size: 100` |
 | 1.4 | 汎用例外ハンドラがない | **解消済み** | `GlobalExceptionHandler` が `Exception`/`DataAccessException`/`MissingServletRequestParameterException`/`MethodArgumentTypeMismatchException`/`NoHandlerFoundException` を含め網羅的に `{status, message}` へ整形 |
