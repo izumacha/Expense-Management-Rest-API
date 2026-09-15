@@ -97,20 +97,30 @@ class JwtAuthorizationTest {
                 .thenReturn(new PageResponse<CategoryResponse>(List.of(), 0, 20, 0, 0));
     }
 
-    // 指定した発行時刻・有効期限で実物の JWT を発行するヘルパー
+    // 指定した発行時刻・有効期限で実物の JWT を発行するヘルパー（iss は本アプリの識別子）
     private String mintToken(Instant issuedAt, Instant expiresAt) {
-        // 主体・発行時刻・有効期限を持つクレームを組み立てる
-        JwtClaimsSet claims = JwtClaimsSet.builder()
+        // 本番の発行経路（AuthTokenService）と同じ iss を載せて発行する
+        return mintToken(JwtConfig.TOKEN_ISSUER, issuedAt, expiresAt);
+    }
+
+    // iss を明示して実物の JWT を発行するヘルパー（iss の検証を確かめるテストが使う）
+    private String mintToken(String issuer, Instant issuedAt, Instant expiresAt) {
+        // 発行者・主体・発行時刻・有効期限を持つクレームを組み立てる
+        JwtClaimsSet.Builder builder = JwtClaimsSet.builder()
                 // 主体（テスト用のユーザー名）を設定する
                 .subject("test-api-user")
                 // 発行時刻を設定する
                 .issuedAt(issuedAt)
                 // 有効期限を設定する
-                .expiresAt(expiresAt)
-                // クレームを確定する
-                .build();
+                .expiresAt(expiresAt);
+        // issuer が null のときは iss クレームを載せない（「iss 無しのトークン」を作るため）
+        if (issuer != null) {
+            // 指定された発行者を iss クレームとして設定する
+            builder.issuer(issuer);
+        }
         // HS256 の署名ヘッダとクレームを署名して JWT 文字列を返す
-        return jwtEncoder.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims))
+        return jwtEncoder.encode(JwtEncoderParameters.from(
+                        JwsHeader.with(MacAlgorithm.HS256).build(), builder.build()))
                 // 署名済みトークンの文字列表現を取り出す
                 .getTokenValue();
     }
@@ -182,5 +192,49 @@ class JwtAuthorizationTest {
                         .header("Access-Control-Request-Method", "GET"))
                 // 許可オリジンが空（全拒否）のため 403 で拒否されることを検証する
                 .andExpect(status().isForbidden());
+    }
+
+    // 署名は正しいが iss が別サービスのトークンは 401 になることを検証する。
+    //
+    // この検査が無いと「共有シークレットを知っている全員」が通ってしまう。署名鍵を
+    // 他サービスと共用してしまった運用ミス（同じ JWT_SECRET を使い回す）が、そのまま
+    // この API への完全なアクセスになる。**修正前は実測で 200 が返っていた**（§9）。
+    @Test
+    void 別サービスが発行したトークンは401() throws Exception {
+        // 署名鍵は同じだが iss だけが別のトークンを発行する
+        String foreignToken = mintToken("some-other-service", Instant.now(), Instant.now().plusSeconds(3600));
+        // 発行者違いのトークンを付けて GET する
+        mockMvc.perform(get("/api/categories")
+                        // 発行者違いのトークンを Authorization ヘッダに載せる
+                        .header("Authorization", "Bearer " + foreignToken))
+                // ステータスが 401 であることを検証する
+                .andExpect(status().isUnauthorized())
+                // 本体の status フィールドが 401 であることを検証する
+                .andExpect(jsonPath("$.status").value(401))
+                // 発行者違いの詳細を漏らさず、トークン無しと同じ安全な文言であることを検証する
+                .andExpect(jsonPath("$.message").value(ErrorMessages.UNAUTHORIZED));
+    }
+
+    // iss クレームを持たないトークンも 401 になることを検証する（未設定は「一致しない」側へ倒す）。
+    //
+    // 「不一致だけを弾き、未設定は通す」形にすると、iss を省くだけで検査を迂回できてしまい、
+    // 上のテストが守っているはずの境界がそのまま開く（fail-closed を保つための対の検査）。
+    @Test
+    void iss無しのトークンは401() throws Exception {
+        // iss クレームを載せずにトークンを発行する（null を渡すと iss を付けない）
+        String issuerlessToken = mintToken(null, Instant.now(), Instant.now().plusSeconds(3600));
+        // iss 無しのトークンを付けて GET する
+        mockMvc.perform(get("/api/categories")
+                        // iss 無しのトークンを Authorization ヘッダに載せる
+                        .header("Authorization", "Bearer " + issuerlessToken))
+                // ステータスが 401 であることを検証する
+                .andExpect(status().isUnauthorized())
+                // 本体の status フィールドが 401 であることを検証する
+                .andExpect(jsonPath("$.status").value(401))
+                // iss 未設定の詳細を漏らさず、トークン無しと同じ安全な文言であることを検証する
+                // （発行者違いの検査と対称にしておく。片方だけ文言を見ていると、独自の
+                //   AuthenticationEntryPoint が外れて "The iss claim is not valid" が
+                //   漏れ出したときに、この経路だけ赤くならず検出が弱くなる）
+                .andExpect(jsonPath("$.message").value(ErrorMessages.UNAUTHORIZED));
     }
 }

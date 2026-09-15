@@ -49,7 +49,7 @@ docker compose up --build        # PostgreSQL + アプリを一括起動（推�
 - `domain/` — JPA エンティティ（`Category` / `Expense`、`@PrePersist` で `createdAt`）。
 - `dto/request/` ・ `dto/response/` — 入力検証用と出力整形用を分離し、内部エンティティを API 契約から切り離す。
 - `exception/` — `GlobalExceptionHandler` ＋カスタム例外（`NotFoundException` / `DuplicateException`）を HTTP ステータスへマップ。
-- `config/` — Spring Security 設定（`SecurityConfig`: JWT 認証必須化・CORS 許可オリジン制限・401/403 のエラー契約整形）、JWT の鍵構成（`JwtConfig`: HS256 共有シークレットの検証と JwtEncoder/JwtDecoder。シークレット未設定・32 バイト未満は起動失敗）、API ユーザー構成（`ApiUserConfig`: 環境変数由来の単一ユーザー + bcrypt 照合。未設定・平文ハッシュは起動失敗）、タイムゾーン固定（`TimeZoneConfig`）。
+- `config/` — Spring Security 設定（`SecurityConfig`: JWT 認証必須化・CORS 許可オリジン制限・401/403 のエラー契約整形）、JWT の鍵構成（`JwtConfig`: HS256 共有シークレットの検証と JwtEncoder/JwtDecoder。シークレット未設定・32 バイト未満は起動失敗。デコーダは既定の検証（有効期限・not-before）に加えて `iss` が `JwtConfig.TOKEN_ISSUER` と一致することも要求する）、API ユーザー構成（`ApiUserConfig`: 環境変数由来の単一ユーザー + bcrypt 照合。未設定・平文ハッシュは起動失敗）、タイムゾーン固定（`TimeZoneConfig`）。
 - `security/` — IP ベースのレート制限フィルタ（`RateLimitFilter`）。
 - `validation/` — Bean Validation 制約（`MaxCodePoints`、コードポイント単位の文字数検証）と、DTO の正規コンストラクタから呼ばれるカテゴリ名の正規化ユーティリティ（`CategoryNameNormalizer`、前後空白除去 + Unicode NFC 正規化）、および外部由来の文字列を記録先へ書く前に無害化する共通ユーティリティ（`TextSanitizer`、制御文字の置換＋長さの打ち切り。ログ出力と監査ログの両方が使う）。
 - `web/` — 横断的関心事: エラー応答の共通整形（`ApiErrorWriter`）、ページング入力の無害化（`PageableSanitizer`）、リクエスト本文サイズ上限（`RequestBodySizeLimitFilter`）。
@@ -61,6 +61,7 @@ docker compose up --build        # PostgreSQL + アプリを一括起動（推�
 
 - `SecurityConfig` の `anyRequest().authenticated()` を弱めない。認証不要にしてよいのは `POST /api/auth/token`（と ERROR ディスパッチ）のみ。
 - fail-closed を維持する: `JWT_SECRET` 未設定/32 バイト未満、`API_USER_NAME`/`API_USER_PASSWORD_HASH` 未設定/平文、CORS の `*` 指定は、いずれも起動失敗にする（実行時に静かに壊さない）。
+- **`iss` クレームは発行側と検証側の両方が同じ 1 つの定数（`JwtConfig.TOKEN_ISSUER`）を読む。** 発行（`AuthTokenService`）が名乗るだけで検証（`JwtConfig.jwtDecoder`）が見ない状態にしない — 署名鍵さえ合えば通るため、`JWT_SECRET` を他サービスと共用してしまった運用ミスがそのままこの API への完全なアクセスになる（実測: 検証を入れる前は `iss` が別サービスのトークンでも 200 が返っていた）。`iss` 未設定のトークンも「一致しない」側へ倒して 401 にする（不一致だけを弾くと `iss` を省くだけで迂回できる）。**バリデータは `JwtValidators.createDefaultWithIssuer(TOKEN_ISSUER)` で組み立てる** — `setJwtValidator` は既定のバリデータ（`exp` / `nbf` の時刻検証と証明書バインド `cnf.x5t#S256` の検証）を**置き換える**ので、`DelegatingOAuth2TokenValidator` を自分で組むと「既定を束ね忘れて期限切れトークンが通る」事故を書けてしまう。このファクトリは既定を必ず内側へ入れ直すため、その誤りが表現できない（自分で組んでいた版では、束ね忘れの変異を `JwtAuthorizationTest` の期限切れ検査が落とすことを実測で確認したうえで、そもそも書けない形へ寄せた）。
 - CSRF 無効はステートレス Bearer 認証（Cookie 不使用・セッション STATELESS）が前提。Cookie 認証を導入する場合は CSRF 保護を再有効化する。
 - 401/403 も既存のエラー契約 `{ "status", "message" }`（`ApiErrorWriter` / `ErrorMessages`）で返す。トークン発行の認証失敗はユーザー名・パスワードのどちらが誤りかを区別しない文言にする（ユーザー列挙防止）。
 - CORS の許可メソッド/ヘッダは最小限（GET/POST/PUT/DELETE、Authorization/Content-Type）を維持し、`allowCredentials` は false のままにする。

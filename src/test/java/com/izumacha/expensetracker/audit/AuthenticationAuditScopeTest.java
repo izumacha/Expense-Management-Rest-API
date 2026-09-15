@@ -144,8 +144,11 @@ class AuthenticationAuditScopeTest {
 
     // 有効な JWT を発行するヘルパー
     private String mintValidToken() {
-        // 主体・発行時刻・有効期限を持つクレームを組み立てる
+        // 発行者・主体・発行時刻・有効期限を持つクレームを組み立てる
         JwtClaimsSet claims = JwtClaimsSet.builder()
+                // 発行者を本アプリの識別子にする（デコーダが iss の一致を要求するため、
+                // 本番の発行経路 AuthTokenService と同じ値を載せないと 401 になる）
+                .issuer(JwtConfig.TOKEN_ISSUER)
                 // 主体（テスト用のユーザー名）を設定する
                 .subject(USERNAME)
                 // 発行時刻を現在にする
